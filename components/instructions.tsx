@@ -17,7 +17,7 @@ export function Instructions({ onClick }: InstructionsProps) {
       <p className="mb-1">
         <span className="font-bold">Space</span> - Jump
       </p>
-      <p className="mb-1 text-green-400 font-bold">E - Draw on canvas (when near)</p>
+      <p className="mb-1 text-green-400 font-bold animate-pulse">E - Draw on canvas (when near)</p>
       <p className="mb-1">
         <span className="font-bold">ESC</span> - Exit drawing mode
       </p>
@@ -27,6 +27,13 @@ export function Instructions({ onClick }: InstructionsProps) {
       >
         Click anywhere to start
       </button>
+
+      <div className="mt-4 border-t border-white/30 pt-2">
+        <p className="text-yellow-300 font-bold">Multiplayer Tips:</p>
+        <p className="text-xs mt-1">• Share the URL to invite others</p>
+        <p className="text-xs">• Each browser window creates a separate player</p>
+        <p className="text-xs">• Drawings are shared with all players</p>
+      </div>
     </div>
   )
 }

@@ -115,15 +115,16 @@ export default function Gallery({ username }: GalleryProps) {
           }
           break
         case "KeyE":
+          // Log the key press for debugging
+          console.log("E key pressed", {
+            nearbyCanvas: nearbyCanvas ? nearbyCanvas.userData?.id : null,
+            drawingMode,
+            isLocked: controls.isLocked,
+          })
+
           if (nearbyCanvas && !drawingMode && controls.isLocked) {
             console.log("Entering drawing mode for canvas:", nearbyCanvas.userData?.id)
             enterDrawingMode(nearbyCanvas)
-          } else if (!drawingMode && controls.isLocked) {
-            console.log("Pressed E but no canvas nearby or not eligible:", {
-              nearbyCanvas: !!nearbyCanvas,
-              drawingMode,
-              isLocked: controls.isLocked,
-            })
           }
           break
       }
@@ -625,7 +626,8 @@ export default function Gallery({ username }: GalleryProps) {
       canvases.push(canvas)
     }
 
-    function checkCanvasInteraction() {
+    let checkCanvasInteraction = () => {}
+    checkCanvasInteraction = () => {
       // Cast a ray from the camera center
       raycaster.setFromCamera(new THREE.Vector2(0, 0), camera)
 
@@ -633,21 +635,35 @@ export default function Gallery({ username }: GalleryProps) {
 
       if (intersects.length > 0 && intersects[0].distance < 3) {
         const canvasObject = intersects[0].object as THREE.Mesh
-        setNearbyCanvas(canvasObject)
-        setInteractionPrompt("Press E to draw on canvas")
 
-        // Debug info
-        console.log("Looking at canvas:", canvasObject.userData?.id, "Distance:", intersects[0].distance)
-      } else {
+        // Only update if it's a different canvas or we didn't have one before
+        if (!nearbyCanvas || nearbyCanvas.userData?.id !== canvasObject.userData?.id) {
+          console.log("Looking at canvas:", canvasObject.userData?.id, "Distance:", intersects[0].distance)
+          setNearbyCanvas(canvasObject)
+          setInteractionPrompt("Press E to draw on canvas")
+        }
+      } else if (nearbyCanvas) {
+        console.log("No longer looking at a canvas")
         setNearbyCanvas(null)
         setInteractionPrompt("")
       }
     }
 
-    function enterDrawingMode(canvasObj: THREE.Mesh) {
-      controls.unlock()
-      setDrawingMode(true)
-      setCurrentCanvas(canvasObj)
+    let enterDrawingMode = (canvasObj: THREE.Mesh) => {}
+    enterDrawingMode = (canvasObj: THREE.Mesh) => {
+      console.log("Entering drawing mode for canvas:", canvasObj.userData?.id)
+
+      // Force unlock controls if they're locked
+      if (controls.isLocked) {
+        controls.unlock()
+      }
+
+      // Small delay to ensure controls are unlocked before setting drawing mode
+      setTimeout(() => {
+        setDrawingMode(true)
+        setCurrentCanvas(canvasObj)
+        console.log("Drawing mode activated")
+      }, 100)
     }
 
     function setupPeerConnection() {
@@ -759,10 +775,7 @@ export default function Gallery({ username }: GalleryProps) {
     }
 
     function joinGallery(peerId: string, playerColor: string) {
-      // In a real application, you would have a signaling server to discover peers
-      // For simplicity, we'll use a hardcoded list of known peers or a URL parameter
-
-      // Check if there's a peer ID in the URL to connect to (using shorter parameter name)
+      // Check if there's a peer ID in the URL to connect to
       const urlParams = new URLSearchParams(window.location.search)
       const connectToPeer = urlParams.get("p") || urlParams.get("peer") // Support both formats
 
@@ -773,12 +786,16 @@ export default function Gallery({ username }: GalleryProps) {
             connectToPeerById(targetPeerId)
           }
         })
-      }
 
-      // Update the URL with our peer ID for others to connect - make it shorter
-      const baseUrl = window.location.origin + window.location.pathname
-      const newUrl = `${baseUrl}?p=${peerId}`
-      window.history.replaceState({}, "", newUrl)
+        // Don't modify the URL if we're connecting to an existing peer
+        console.log("Joining existing gallery with peer:", connectToPeer)
+      } else {
+        // Only update the URL if we're creating a new gallery
+        const baseUrl = window.location.origin + window.location.pathname
+        const newUrl = `${baseUrl}?p=${peerId}`
+        window.history.replaceState({}, "", newUrl)
+        console.log("Created new gallery with peer ID:", peerId)
+      }
 
       // Display connection info
       console.log("Share this URL for others to join:", window.location.href)
@@ -1047,6 +1064,21 @@ export default function Gallery({ username }: GalleryProps) {
     }
   }, [username])
 
+  // Add a direct event listener for the E key at the component level
+  // Add this useEffect after the main useEffect
+  useEffect(() => {
+    const handleKeyE = (e: KeyboardEvent) => {
+      if (e.code === "KeyE" && !drawingMode && nearbyCanvas && started) {
+        console.log("E key pressed at component level")
+        e.preventDefault()
+        enterDrawingMode(nearbyCanvas)
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyE)
+    return () => window.removeEventListener("keydown", handleKeyE)
+  }, [nearbyCanvas, drawingMode, started])
+
   const connectionInfoText = myId ? (
     <div className="absolute bottom-4 left-4 z-10 rounded bg-black/70 p-2 text-white">
       <p>Share this URL for others to join:</p>
@@ -1056,6 +1088,44 @@ export default function Gallery({ username }: GalleryProps) {
     </div>
   ) : null
 
+  // Add a debug overlay to help troubleshoot canvas interaction
+  // Add this at the end of the component, just before the return statement
+
+  const [debugMode, setDebugMode] = useState(false)
+
+  // Toggle debug mode with the "D" key
+  useEffect(() => {
+    const handleKeyPress = (e: KeyboardEvent) => {
+      if (e.code === "KeyD" && e.altKey) {
+        setDebugMode((prev) => !prev)
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyPress)
+    return () => window.removeEventListener("keydown", handleKeyPress)
+  }, [])
+
+  // Add this to the return statement, just before the closing div
+  const debugOverlay = debugMode ? (
+    <div className="absolute top-4 right-4 z-10 bg-black/80 p-3 text-white text-xs max-w-xs overflow-auto max-h-96">
+      <h3 className="font-bold mb-1">Debug Info:</h3>
+      <p>Near Canvas: {nearbyCanvas ? nearbyCanvas.userData?.id : "none"}</p>
+      <p>Drawing Mode: {drawingMode ? "true" : "false"}</p>
+      <p>Controls Locked: {started ? "true" : "false"}</p>
+      <p>
+        Player Position:{" "}
+        {JSON.stringify({
+          x: playerPositionRef.current.x.toFixed(2),
+          y: playerPositionRef.current.y.toFixed(2),
+          z: playerPositionRef.current.z.toFixed(2),
+        })}
+      </p>
+      <p>Players Connected: {Object.keys(players).length}</p>
+      <p className="mt-2 text-gray-400">Press Alt+D to toggle debug</p>
+    </div>
+  ) : null
+
+  // Modify the return statement to include the debug overlay
   return (
     <div ref={containerRef} className="h-screen w-screen">
       {!started && !drawingMode && <Instructions onClick={() => {}} />}
@@ -1065,6 +1135,9 @@ export default function Gallery({ username }: GalleryProps) {
       {drawingMode && currentCanvas && <DrawingInterface />}
 
       {connectionInfoText}
+
+      {debugOverlay}
     </div>
   )
 }
+

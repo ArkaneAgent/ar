@@ -35,6 +35,7 @@ export class TextSprite extends THREE.Sprite {
 
     this.scale.set(2, 0.5, 1)
     this.position.copy(position)
-    this.position.y += 0.7 // Raise the text higher above the player's head
+    this.position.y += 1.2 // Significantly raise the text above the player's head
   }
 }
+

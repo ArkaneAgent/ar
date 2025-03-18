@@ -9,7 +9,7 @@ import { InteractionPrompt } from "@/components/interaction-prompt"
 import { DrawingInterface } from "@/components/drawing-interface"
 import { PlayerModel } from "@/components/player-model"
 import { TextSprite } from "@/components/text-sprite"
-import { PeerConnectionManager } from "@/components/peer-connection-manager"
+import { SimplePeerManager } from "@/components/simple-peer-manager"
 
 interface Player {
   id: string
@@ -953,7 +953,7 @@ export default function Gallery({ username }: GalleryProps) {
             localStorage.setItem(`canvas-${canvasId}`, JSON.stringify(canvasData))
             addDebugLog("Canvas saved to localStorage: " + canvasId)
 
-            // Dispatch custom event for canvas update
+            // Dispatch custom event
             const event = new CustomEvent("canvasUpdated", {
               detail: {
                 canvasId,
@@ -1123,7 +1123,7 @@ export default function Gallery({ username }: GalleryProps) {
 
       {drawingMode && currentCanvas && <DrawingInterface />}
 
-      <PeerConnectionManager
+      <SimplePeerManager
         username={username}
         onPeerConnected={handlePeerConnected}
         onPlayerJoined={handlePlayerJoined}

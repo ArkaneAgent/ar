@@ -54,6 +54,7 @@ export default function Gallery({ username }: GalleryProps) {
   const sceneRef = useRef<THREE.Scene | null>(null)
   const canvasesRef = useRef<THREE.Mesh[]>([])
   const controlsRef = useRef<PointerLockControls | null>(null)
+  const existingPlayersRef = useRef<Set<string>>(new Set())
 
   // Add debug log function
   const addDebugLog = (message: string) => {
@@ -82,22 +83,46 @@ export default function Gallery({ username }: GalleryProps) {
   const handlePlayerJoined = (playerId: string, playerUsername: string, color: string, position: any) => {
     addDebugLog(`Player joined: ${playerUsername} (${playerId})`)
 
-    // Skip if this is our own player but make sure we create our own model
-    const isOwnPlayer = playerId === myId
+    // Check if this player already exists to prevent duplication
+    if (existingPlayersRef.current.has(playerId)) {
+      addDebugLog(`Player ${playerId} already exists, updating instead of creating new`)
 
-    // Create a new player model if we have a scene
-    if (sceneRef.current) {
-      // Remove any existing model for this player
+      // Update the player's position if they already exist
       setPlayers((prev) => {
-        if (prev[playerId] && prev[playerId].model) {
-          sceneRef.current?.remove(prev[playerId].model)
-        }
-        if (prev[playerId] && prev[playerId].nameSprite) {
-          sceneRef.current?.remove(prev[playerId].nameSprite)
+        if (prev[playerId]) {
+          const updatedPlayer = {
+            ...prev[playerId],
+            position: new THREE.Vector3(position.x, position.y, position.z),
+          }
+
+          if (updatedPlayer.model) {
+            updatedPlayer.model.position.copy(updatedPlayer.position)
+          }
+
+          if (updatedPlayer.nameSprite) {
+            updatedPlayer.nameSprite.position.set(
+              updatedPlayer.position.x,
+              updatedPlayer.position.y + 2.2,
+              updatedPlayer.position.z,
+            )
+          }
+
+          return {
+            ...prev,
+            [playerId]: updatedPlayer,
+          }
         }
         return prev
       })
 
+      return
+    }
+
+    // Mark this player as existing
+    existingPlayersRef.current.add(playerId)
+
+    // Create a new player model if we have a scene
+    if (sceneRef.current) {
       // Create the player model
       const playerPos = new THREE.Vector3(position.x, position.y, position.z)
       const playerModel = new PlayerModel(color, playerPos)
@@ -110,7 +135,7 @@ export default function Gallery({ username }: GalleryProps) {
       sceneRef.current.add(nameSprite)
 
       // If this is our own player, store a reference
-      if (isOwnPlayer) {
+      if (playerId === myId) {
         myPlayerRef.current = {
           model: playerModel,
           nameSprite: nameSprite,
@@ -172,6 +197,9 @@ export default function Gallery({ username }: GalleryProps) {
 
   const handlePlayerLeft = (playerId: string) => {
     addDebugLog(`Player left: ${playerId}`)
+
+    // Remove from existing players set
+    existingPlayersRef.current.delete(playerId)
 
     setPlayers((prev) => {
       if (!prev[playerId]) return prev

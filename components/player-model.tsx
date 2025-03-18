@@ -92,3 +92,4 @@ export class PlayerModel extends THREE.Group {
     this.add(rightPupil)
   }
 }
+

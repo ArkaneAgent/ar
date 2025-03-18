@@ -4,6 +4,8 @@ import { Suspense, useState } from "react"
 import dynamic from "next/dynamic"
 import { LoadingScreen } from "@/components/loading-screen"
 import { LoginScreen } from "@/components/login-screen"
+import { ForceUrlDisplay } from "@/components/force-url-display"
+import { StandalonePeer } from "@/components/standalone-peer"
 
 // Import the Gallery component dynamically with SSR disabled
 // This is necessary because Three.js requires the browser environment
@@ -27,6 +29,8 @@ export default function Home() {
 
   return (
     <main className="h-screen w-screen overflow-hidden">
+      <ForceUrlDisplay />
+      <StandalonePeer />
       <Suspense fallback={<LoadingScreen />}>
         <Gallery username={username} />
       </Suspense>

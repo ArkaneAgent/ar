@@ -44,6 +44,7 @@ export default function Gallery({ username }: GalleryProps) {
   const [players, setPlayers] = useState<Record<string, Player>>({})
   const [myId, setMyId] = useState<string>("")
   const [shareUrl, setShareUrl] = useState<string>("")
+  const [connectionStatus, setConnectionStatus] = useState<"connecting" | "connected" | "error" | "">("")
   const playerPositionRef = useRef<THREE.Vector3>(new THREE.Vector3(0, 1.6, 5))
   const playerRotationRef = useRef<number>(0)
   const myPlayerRef = useRef<{ model: PlayerModel | null; nameSprite: TextSprite | null }>({
@@ -226,11 +227,18 @@ export default function Gallery({ username }: GalleryProps) {
       // Generate a random color for this player
       const playerColor = getRandomColor()
 
+      setConnectionStatus("connecting")
+
       // Create a new Peer with a random ID
       const peer = new Peer({
         debug: 1, // Reduce debug level for better performance
         config: {
-          iceServers: [{ urls: "stun:stun.l.google.com:19302" }, { urls: "stun:global.stun.twilio.com:3478" }],
+          iceServers: [
+            { urls: "stun:stun.l.google.com:19302" }, 
+            { urls: "stun:global.stun.twilio.com:3478" },
+            { urls: "stun:stun1.l.google.com:19302" },
+            { urls: "stun:stun2.l.google.com:19302" }
+          ],
         },
       })
 
@@ -241,6 +249,7 @@ export default function Gallery({ username }: GalleryProps) {
       peer.on("open", (id) => {
         console.log("My peer ID is:", id)
         setMyId(id)
+        setConnectionStatus("connected")
 
         // IMPORTANT: Clean up any existing player models before creating new ones
         if (myPlayerRef.current.model) {
@@ -353,6 +362,21 @@ export default function Gallery({ username }: GalleryProps) {
       // Handle errors
       peer.on("error", (err) => {
         console.error("Peer error:", err)
+        setConnectionStatus("error")
+        
+        // If error is due to peer already taken, try to reconnect with a new ID
+        if (err.type === 'unavailable-id') {
+          console.log("Peer ID already taken, creating a new one")
+          peer.disconnect()
+          peer.destroy()
+          setPeerInitialized(false)
+          setTimeout(setupPeerConnection, 1000)
+        }
+      })
+
+      peer.on("disconnected", () => {
+        console.log("Peer disconnected, attempting to reconnect")
+        peer.reconnect()
       })
 
       return peer
@@ -817,52 +841,76 @@ export default function Gallery({ username }: GalleryProps) {
     }
 
     function joinGallery(peerId: string, playerColor: string) {
-      // Check if there's a peer ID in the URL to connect to
-      const urlParams = new URLSearchParams(window.location.search)
-      const connectToPeer = urlParams.get("p") || urlParams.get("peer") // Support both formats
+      try {
+        // Check if there's a peer ID in the URL to connect to
+        const urlParams = new URLSearchParams(window.location.search)
+        const connectToPeer = urlParams.get("p") || urlParams.get("peer") // Support both formats
 
-      if (connectToPeer && connectToPeer !== peerId) {
-        // Connect to the specified peer
-        const peerIds = connectToPeer.split(",")
-        console.log("Connecting to peers:", peerIds)
+        if (connectToPeer && connectToPeer !== peerId) {
+          // Connect to the specified peer
+          const peerIds = connectToPeer.split(",")
+          console.log("Connecting to peers:", peerIds)
 
-        peerIds.forEach((targetPeerId) => {
-          if (targetPeerId && targetPeerId !== peerId) {
-            connectToPeerById(targetPeerId)
-          }
-        })
+          // Try to connect to each peer
+          let connectedToAny = false;
+          peerIds.forEach((targetPeerId) => {
+            if (targetPeerId && targetPeerId !== peerId && targetPeerId.trim() !== "") {
+              connectToPeerById(targetPeerId.trim())
+              connectedToAny = true;
+            }
+          })
 
-        // Don't modify the URL if we're connecting to an existing peer
-        console.log("Joining existing gallery with peer:", connectToPeer)
-      } else {
-        // Only update the URL if we're creating a new gallery
-        const baseUrl = window.location.origin + window.location.pathname
-        const newUrl = `${baseUrl}?p=${peerId}`
-        window.history.replaceState({}, "", newUrl)
-        setShareUrl(newUrl)
-        console.log("Created new gallery with peer ID:", peerId)
+          // Don't modify the URL if we're connecting to an existing peer
+          console.log("Joining existing gallery with peer:", connectToPeer)
+          
+          // Set the share URL
+          const baseUrl = window.location.origin + window.location.pathname
+          const newUrl = `${baseUrl}?p=${connectToPeer},${peerId}`
+          setShareUrl(newUrl)
+        } else {
+          // Only update the URL if we're creating a new gallery
+          const baseUrl = window.location.origin + window.location.pathname
+          const newUrl = `${baseUrl}?p=${peerId}`
+          window.history.replaceState({}, "", newUrl)
+          setShareUrl(newUrl)
+          console.log("Created new gallery with peer ID:", peerId)
+        }
+
+        // Display connection info
+        console.log("Share this URL for others to join:", window.location.href)
+      } catch (error) {
+        console.error("Error in joinGallery:", error)
       }
-
-      // Display connection info
-      console.log("Share this URL for others to join:", window.location.href)
-      setShareUrl(window.location.href)
     }
 
     function connectToPeerById(targetPeerId: string) {
-      if (!peerRef.current) return
+      if (!peerRef.current) {
+        console.error("PeerRef is null, cannot connect to peer:", targetPeerId)
+        return;
+      }
 
-      console.log("Connecting to peer:", targetPeerId)
+      try {
+        console.log("Connecting to peer:", targetPeerId)
 
-      // Connect to the target peer
-      const conn = peerRef.current.connect(targetPeerId, {
-        reliable: true,
-      })
+        // Check if we're already connected to this peer
+        if (connectionsRef.current[targetPeerId]) {
+          console.log("Already connected to peer:", targetPeerId)
+          return;
+        }
 
-      // Store the connection
-      connectionsRef.current[targetPeerId] = conn
+        // Connect to the target peer
+        const conn = peerRef.current.connect(targetPeerId, {
+          reliable: true,
+        })
 
-      // Setup handlers for this connection
-      setupConnectionHandlers(conn)
+        // Store the connection
+        connectionsRef.current[targetPeerId] = conn
+
+        // Setup handlers for this connection
+        setupConnectionHandlers(conn)
+      } catch (error) {
+        console.error("Error connecting to peer:", targetPeerId, error)
+      }
     }
 
     function setupConnectionHandlers(conn: Peer.DataConnection) {
@@ -1190,7 +1238,7 @@ export default function Gallery({ username }: GalleryProps) {
 
       renderer.dispose()
     }
-  }, [username, myId, peerInitialized])
+  }, [username])
 
   // Add a direct event listener for the E key at the component level
   useEffect(() => {
@@ -1251,7 +1299,11 @@ export default function Gallery({ username }: GalleryProps) {
       </p>
       <p className="mt-2 text-xs">Click the URL above to copy it to clipboard</p>
       <p className="text-xs">Each browser creates a separate player with its own connection.</p>
-      <p className="mt-2 text-xs font-bold">Connected players: {Object.keys(players).length}</p>
+      <p className="mt-2 text-xs font-bold">
+        Connected players: {Object.keys(players).length}
+        {connectionStatus === "connecting" && " (Connecting...)"}
+        {connectionStatus === "error" && " (Connection error, try refreshing)"}
+      </p>
     </div>
   ) : null
 

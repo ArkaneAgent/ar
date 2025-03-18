@@ -59,7 +59,7 @@ export class PlayerModel extends THREE.Group {
       metalness: 0.1,
     })
 
-    // Pupil material (black part that moves)
+    // Pupil material (black part)
     const pupilMaterial = new THREE.MeshStandardMaterial({
       color: 0x000000,
       roughness: 0.1,
@@ -90,22 +90,5 @@ export class PlayerModel extends THREE.Group {
     const rightPupil = new THREE.Mesh(new THREE.SphereGeometry(eyeRadius * 0.6, 16, 16), pupilMaterial)
     rightPupil.position.set(eyeDistance, eyeYPosition, capsuleRadius * 0.8 + eyeRadius * 0.5)
     this.add(rightPupil)
-
-    // Animate the pupils for googly eye effect
-    const animate = () => {
-      const time = Date.now() * 0.001
-
-      // Create random movement effect
-      leftPupil.position.x = -eyeDistance + Math.sin(time * 2.3) * (eyeRadius * 0.3)
-      leftPupil.position.y = eyeYPosition + Math.cos(time * 1.7) * (eyeRadius * 0.3)
-
-      rightPupil.position.x = eyeDistance + Math.cos(time * 1.9) * (eyeRadius * 0.3)
-      rightPupil.position.y = eyeYPosition + Math.sin(time * 2.5) * (eyeRadius * 0.3)
-
-      requestAnimationFrame(animate)
-    }
-
-    animate()
   }
 }
-

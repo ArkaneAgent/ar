@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, useRef } from "react"
 import Peer from "peerjs"
 
 interface PeerConnectionManagerProps {
@@ -24,6 +24,13 @@ export function PeerConnectionManager({
   const [connections, setConnections] = useState<Record<string, Peer.DataConnection>>({})
   const [isHost, setIsHost] = useState(false)
   const [connectionStatus, setConnectionStatus] = useState("Initializing...")
+  const [connectedPeers, setConnectedPeers] = useState<string[]>([])
+
+  // Use refs to maintain access to latest state in event handlers
+  const connectionsRef = useRef<Record<string, Peer.DataConnection>>({})
+  const myPeerIdRef = useRef<string>("")
+  const myColorRef = useRef<string>("")
+  const myPositionRef = useRef<any>({ x: 0, y: 1.6, z: 5 })
 
   useEffect(() => {
     // Function to generate a random color
@@ -38,6 +45,7 @@ export function PeerConnectionManager({
 
     // My player color
     const myColor = getRandomColor()
+    myColorRef.current = myColor
 
     // Function to log with timestamp
     const log = (message: string) => {
@@ -60,14 +68,23 @@ export function PeerConnectionManager({
       },
     })
 
-    // Store peer in window for debugging
+    // Store peer in window for debugging and access from other components
     ;(window as any).peerInstance = peer
+    ;(window as any).peerConnections = {}
 
     // Handle peer open event
     peer.on("open", (id) => {
       log(`Connected with peer ID: ${id}`)
       setMyPeerId(id)
+      myPeerIdRef.current = id
       onPeerConnected(id)
+
+      // Create our own player model
+      const myPosition = { x: 0, y: 1.6, z: 5 }
+      myPositionRef.current = myPosition
+
+      // Add ourselves to the player list
+      onPlayerJoined(id, username, myColor, myPosition)
 
       // Update URL if we're the host
       if (!hostPeerId) {
@@ -106,7 +123,7 @@ export function PeerConnectionManager({
 
     // Function to connect to a peer
     const connectToPeer = (peerId: string) => {
-      if (peerId === myPeerId) return
+      if (peerId === myPeerIdRef.current) return
 
       log(`Connecting to peer: ${peerId}`)
       const conn = peer.connect(peerId, { reliable: true })
@@ -116,6 +133,9 @@ export function PeerConnectionManager({
     // Function to set up a connection
     const setupConnection = (conn: Peer.DataConnection) => {
       // Store the connection
+      connectionsRef.current[conn.peer] = conn
+      ;(window as any).peerConnections[conn.peer] = conn
+
       setConnections((prev) => ({
         ...prev,
         [conn.peer]: conn,
@@ -124,17 +144,23 @@ export function PeerConnectionManager({
       // Handle connection open
       conn.on("open", () => {
         log(`Connection established with: ${conn.peer}`)
+        setConnectedPeers((prev) => [...prev, conn.peer])
 
         // Send my info to the peer
-        const myPosition = { x: 0, y: 1.6, z: 5 }
         conn.send({
           type: "playerInfo",
           data: {
-            id: myPeerId || peer.id,
+            id: myPeerIdRef.current,
             username,
             color: myColor,
-            position: myPosition,
+            position: myPositionRef.current,
           },
+        })
+
+        // Request info about all other players
+        conn.send({
+          type: "requestAllPlayers",
+          data: {},
         })
       })
 
@@ -142,7 +168,7 @@ export function PeerConnectionManager({
       conn.on("data", (data: any) => {
         switch (data.type) {
           case "playerInfo":
-            log(`Received player info: ${data.data.username}`)
+            log(`Received player info: ${data.data.username} (${data.data.id})`)
             onPlayerJoined(data.data.id, data.data.username, data.data.color, data.data.position)
             break
 
@@ -159,7 +185,46 @@ export function PeerConnectionManager({
           case "requestAllPlayers":
             // The new peer is requesting info about all connected players
             log("Received request for all players")
-            // We'll handle this in the gallery component
+
+            // Send info about myself
+            conn.send({
+              type: "playerInfo",
+              data: {
+                id: myPeerIdRef.current,
+                username,
+                color: myColor,
+                position: myPositionRef.current,
+              },
+            })
+
+            // Forward the request to all other peers to ensure complete network knowledge
+            Object.values(connectionsRef.current).forEach((otherConn) => {
+              if (otherConn.peer !== conn.peer) {
+                otherConn.send({
+                  type: "forwardPlayerInfo",
+                  data: {
+                    targetPeer: conn.peer,
+                  },
+                })
+              }
+            })
+            break
+
+          case "forwardPlayerInfo":
+            // Someone is requesting that I send my player info to a specific peer
+            const targetPeer = data.data.targetPeer
+            if (connectionsRef.current[targetPeer]) {
+              connectionsRef.current[targetPeer].send({
+                type: "playerInfo",
+                data: {
+                  id: myPeerIdRef.current,
+                  username,
+                  color: myColor,
+                  position: myPositionRef.current,
+                },
+              })
+              log(`Forwarded my player info to: ${targetPeer}`)
+            }
             break
         }
       })
@@ -169,11 +234,16 @@ export function PeerConnectionManager({
         log(`Connection closed with: ${conn.peer}`)
 
         // Remove the connection
+        delete connectionsRef.current[conn.peer]
+        delete (window as any).peerConnections[conn.peer]
+
         setConnections((prev) => {
           const newConnections = { ...prev }
           delete newConnections[conn.peer]
           return newConnections
         })
+
+        setConnectedPeers((prev) => prev.filter((id) => id !== conn.peer))
 
         // Notify that player left
         onPlayerLeft(conn.peer)
@@ -186,12 +256,55 @@ export function PeerConnectionManager({
       })
     }
 
+    // Set up event listener for player position updates
+    const handlePlayerPositionUpdate = (event: CustomEvent) => {
+      const { position, rotation } = event.detail
+
+      // Update our stored position
+      myPositionRef.current = position
+
+      // Send position update to all connected peers
+      Object.values(connectionsRef.current).forEach((conn) => {
+        conn.send({
+          type: "playerMove",
+          data: {
+            position,
+            rotation,
+          },
+        })
+      })
+    }
+
+    // Set up event listener for canvas updates
+    const handleCanvasUpdated = (event: CustomEvent) => {
+      const { canvasId, imageData } = event.detail
+
+      // Send canvas update to all connected peers
+      Object.values(connectionsRef.current).forEach((conn) => {
+        conn.send({
+          type: "updateCanvas",
+          data: {
+            canvasId,
+            imageData,
+          },
+        })
+      })
+    }
+
+    // Add event listeners
+    window.addEventListener("playerPositionUpdate", handlePlayerPositionUpdate as EventListener)
+    window.addEventListener("canvasUpdated", handleCanvasUpdated as EventListener)
+
     // Cleanup function
     return () => {
       log("Cleaning up peer connection...")
 
+      // Remove event listeners
+      window.removeEventListener("playerPositionUpdate", handlePlayerPositionUpdate as EventListener)
+      window.removeEventListener("canvasUpdated", handleCanvasUpdated as EventListener)
+
       // Close all connections
-      Object.values(connections).forEach((conn) => {
+      Object.values(connectionsRef.current).forEach((conn) => {
         conn.close()
       })
 
@@ -205,7 +318,17 @@ export function PeerConnectionManager({
       <div className="font-bold">Connection Status:</div>
       <div>{connectionStatus}</div>
       <div className="mt-1">My Peer ID: {myPeerId}</div>
-      <div>Connected Peers: {Object.keys(connections).length}</div>
+      <div>Connected Peers: {connectedPeers.length}</div>
+      {connectedPeers.length > 0 && (
+        <div className="mt-1 text-xs">
+          <div>Connected to:</div>
+          <ul className="list-disc pl-4">
+            {connectedPeers.map((peerId) => (
+              <li key={peerId}>{peerId.substring(0, 8)}...</li>
+            ))}
+          </ul>
+        </div>
+      )}
       {isHost && <div className="mt-1 text-green-400">You are the host</div>}
     </div>
   )

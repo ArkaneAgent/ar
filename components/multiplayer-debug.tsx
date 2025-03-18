@@ -9,6 +9,7 @@ export function MultiplayerDebug() {
   const [players, setPlayers] = useState<any[]>([])
   const [debugLog, setDebugLog] = useState<string[]>([])
   const [urlParams, setUrlParams] = useState<string>("")
+  const [connectionStatus, setConnectionStatus] = useState<string>("")
 
   useEffect(() => {
     // Update debug info every second
@@ -17,6 +18,9 @@ export function MultiplayerDebug() {
       const peer = (window as any).peerInstance
       if (peer) {
         setMyPeerId(peer.id || "Unknown")
+        setConnectionStatus(peer.disconnected ? "Disconnected" : peer.destroyed ? "Destroyed" : "Connected")
+      } else {
+        setConnectionStatus("No peer instance")
       }
 
       // Get connections
@@ -67,6 +71,39 @@ export function MultiplayerDebug() {
     window.location.href = baseUrl
   }
 
+  const handleForceReconnect = () => {
+    // Get the peer instance
+    const peer = (window as any).peerInstance
+    if (peer) {
+      // Try to reconnect
+      try {
+        if (peer.disconnected) {
+          peer.reconnect()
+        } else {
+          // Destroy and recreate
+          peer.destroy()
+          setTimeout(() => {
+            window.location.reload()
+          }, 500)
+        }
+      } catch (error) {
+        console.error("Error reconnecting:", error)
+        // Force reload as fallback
+        window.location.reload()
+      }
+    } else {
+      // No peer instance, just reload
+      window.location.reload()
+    }
+  }
+
+  const handleRemoveAllPlayers = () => {
+    // Call the removeAllPlayers function if it exists
+    if ((window as any).removeAllPlayers) {
+      ;(window as any).removeAllPlayers()
+    }
+  }
+
   if (!isOpen) {
     return (
       <button
@@ -93,8 +130,17 @@ export function MultiplayerDebug() {
       </div>
 
       <div className="mb-4">
+        <h3 className="font-bold mb-1">Connection Status:</h3>
+        <div
+          className={`bg-gray-800 p-2 rounded text-sm ${connectionStatus === "Connected" ? "text-green-400" : "text-red-400"}`}
+        >
+          {connectionStatus}
+        </div>
+      </div>
+
+      <div className="mb-4">
         <h3 className="font-bold mb-1">My Peer ID:</h3>
-        <div className="bg-gray-800 p-2 rounded text-sm break-all">{myPeerId}</div>
+        <div className="bg-gray-800 p-2 rounded text-sm break-all">{myPeerId || "Not connected"}</div>
       </div>
 
       <div className="mb-4">
@@ -144,14 +190,23 @@ export function MultiplayerDebug() {
         </div>
       </div>
 
-      <div className="mt-4 flex gap-2">
+      <div className="mt-4 grid grid-cols-2 gap-2">
         <button onClick={handleFixUrl} className="bg-green-600 text-white px-3 py-1 rounded text-sm">
           Fix URL & Reload
         </button>
         <button onClick={handleClearAndRestart} className="bg-yellow-600 text-white px-3 py-1 rounded text-sm">
           Clear URL & Restart
         </button>
-        <button onClick={() => window.location.reload()} className="bg-red-600 text-white px-3 py-1 rounded text-sm">
+        <button onClick={handleForceReconnect} className="bg-blue-600 text-white px-3 py-1 rounded text-sm">
+          Force Reconnect
+        </button>
+        <button onClick={handleRemoveAllPlayers} className="bg-red-600 text-white px-3 py-1 rounded text-sm">
+          Remove All Players
+        </button>
+        <button
+          onClick={() => window.location.reload()}
+          className="bg-purple-600 text-white px-3 py-1 rounded text-sm col-span-2"
+        >
           Reload Page
         </button>
       </div>

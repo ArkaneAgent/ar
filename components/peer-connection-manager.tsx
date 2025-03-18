@@ -25,6 +25,7 @@ export function PeerConnectionManager({
   const [connectedPeers, setConnectedPeers] = useState<string[]>([])
   const [errorMessage, setErrorMessage] = useState<string>("")
   const [reconnectCount, setReconnectCount] = useState(0)
+  const [isConnected, setIsConnected] = useState(false)
 
   // Use refs to maintain access to latest state in event handlers
   const connectionsRef = useRef<Record<string, Peer.DataConnection>>({})
@@ -35,6 +36,7 @@ export function PeerConnectionManager({
   const hasCreatedOwnPlayerRef = useRef<boolean>(false)
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const initializedRef = useRef<boolean>(false)
+  const connectionTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
   // Function to log with timestamp
   const log = (message: string) => {
@@ -53,12 +55,23 @@ export function PeerConnectionManager({
     return color
   }
 
+  // Generate a random ID to avoid collisions
+  const generateRandomId = () => {
+    return Math.random().toString(36).substring(2, 10) + Date.now().toString(36)
+  }
+
   // Initialize PeerJS
   const initializePeer = () => {
     // Clear any existing reconnect timeout
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current)
       reconnectTimeoutRef.current = null
+    }
+
+    // Clear any existing connection timeout
+    if (connectionTimeoutRef.current) {
+      clearTimeout(connectionTimeoutRef.current)
+      connectionTimeoutRef.current = null
     }
 
     // If we already have a peer, destroy it
@@ -68,34 +81,92 @@ export function PeerConnectionManager({
       } catch (e) {
         console.error("Error destroying peer:", e)
       }
+      peerRef.current = null
     }
 
     log(`Initializing peer connection (attempt ${reconnectCount + 1})...`)
+    setIsConnected(false)
 
-    // Generate a random ID to avoid collisions
-    const randomId = Math.random().toString(36).substring(2, 10) + Date.now().toString(36)
+    // Generate a random ID
+    const randomId = generateRandomId()
 
-    // Initialize PeerJS with a specific configuration
-    const peer = new Peer(randomId, {
-      debug: 1, // Minimal debug level
-      config: {
-        iceServers: [
-          { urls: "stun:stun.l.google.com:19302" },
-          { urls: "stun:global.stun.twilio.com:3478" },
-          { urls: "stun:stun1.l.google.com:19302" },
-          { urls: "stun:stun2.l.google.com:19302" },
-          { urls: "stun:stun3.l.google.com:19302" },
-          { urls: "stun:stun4.l.google.com:19302" },
-        ],
-      },
-    })
+    try {
+      // Initialize PeerJS with a specific configuration
+      const peer = new Peer(randomId, {
+        debug: 1, // Minimal debug level
+        host: "peerjs-server.herokuapp.com", // Try a different server
+        secure: true,
+        port: 443,
+        config: {
+          iceServers: [
+            { urls: "stun:stun.l.google.com:19302" },
+            { urls: "stun:global.stun.twilio.com:3478" },
+            { urls: "stun:stun1.l.google.com:19302" },
+            { urls: "stun:stun2.l.google.com:19302" },
+            { urls: "stun:stun3.l.google.com:19302" },
+            { urls: "stun:stun4.l.google.com:19302" },
+            {
+              urls: "turn:numb.viagenie.ca",
+              username: "webrtc@live.com",
+              credential: "muazkh",
+            },
+          ],
+          sdpSemantics: "unified-plan",
+        },
+      })
 
-    peerRef.current = peer
+      peerRef.current = peer
 
-    // Store peer in window for debugging and access from other components
-    ;(window as any).peerInstance = peer
-    ;(window as any).peerConnections = {}
+      // Store peer in window for debugging and access from other components
+      ;(window as any).peerInstance = peer
+      ;(window as any).peerConnections = {}
 
+      // Set a connection timeout
+      connectionTimeoutRef.current = setTimeout(() => {
+        if (!isConnected) {
+          log("Connection timeout. Trying alternative method...")
+
+          // Try alternative connection method (without server)
+          if (peerRef.current) {
+            try {
+              peerRef.current.destroy()
+            } catch (e) {
+              console.error("Error destroying peer:", e)
+            }
+          }
+
+          // Create a new peer without specifying a server (use default)
+          const fallbackPeer = new Peer(generateRandomId(), {
+            debug: 1,
+            config: {
+              iceServers: [{ urls: "stun:stun.l.google.com:19302" }, { urls: "stun:global.stun.twilio.com:3478" }],
+            },
+          })
+
+          peerRef.current = fallbackPeer
+          ;(window as any).peerInstance = fallbackPeer
+
+          // Set up the same event handlers for the fallback peer
+          setupPeerEventHandlers(fallbackPeer)
+        }
+      }, 10000) // 10 second timeout
+
+      // Set up event handlers
+      setupPeerEventHandlers(peer)
+    } catch (error) {
+      console.error("Error creating peer:", error)
+      log(`Error creating peer: ${error}`)
+
+      // Try again after a delay
+      reconnectTimeoutRef.current = setTimeout(() => {
+        setReconnectCount((prev) => prev + 1)
+        initializePeer()
+      }, 3000)
+    }
+  }
+
+  // Set up event handlers for a peer
+  const setupPeerEventHandlers = (peer: Peer) => {
     // Handle peer open event
     peer.on("open", (id) => {
       log(`Connected with peer ID: ${id}`)
@@ -103,6 +174,13 @@ export function PeerConnectionManager({
       myPeerIdRef.current = id
       onPeerConnected(id)
       setErrorMessage("") // Clear any previous errors
+      setIsConnected(true)
+
+      // Clear connection timeout
+      if (connectionTimeoutRef.current) {
+        clearTimeout(connectionTimeoutRef.current)
+        connectionTimeoutRef.current = null
+      }
 
       // Create our own player model only once
       if (!hasCreatedOwnPlayerRef.current) {
@@ -176,6 +254,27 @@ export function PeerConnectionManager({
           setReconnectCount((prev) => prev + 1)
 
           // Reinitialize peer
+          initializePeer()
+        }, 3000)
+      }
+    })
+
+    // Handle disconnection
+    peer.on("disconnected", () => {
+      log("Disconnected from server. Attempting to reconnect...")
+      setErrorMessage("Disconnected from server. Attempting to reconnect...")
+      setIsConnected(false)
+
+      // Try to reconnect
+      try {
+        peer.reconnect()
+      } catch (error) {
+        console.error("Error reconnecting:", error)
+
+        // If reconnect fails, try to reinitialize
+        reconnectTimeoutRef.current = setTimeout(() => {
+          log("Reconnection failed. Reinitializing...")
+          setReconnectCount((prev) => prev + 1)
           initializePeer()
         }, 3000)
       }
@@ -427,6 +526,11 @@ export function PeerConnectionManager({
         clearTimeout(reconnectTimeoutRef.current)
       }
 
+      // Clear any connection timeout
+      if (connectionTimeoutRef.current) {
+        clearTimeout(connectionTimeoutRef.current)
+      }
+
       // Close all connections
       Object.values(connectionsRef.current).forEach((conn) => {
         try {
@@ -453,12 +557,40 @@ export function PeerConnectionManager({
     initializePeer()
   }
 
+  // Function to try alternative connection method
+  const handleTryAlternative = () => {
+    log("Trying alternative connection method...")
+
+    // If we have a peer, destroy it
+    if (peerRef.current) {
+      try {
+        peerRef.current.destroy()
+      } catch (e) {
+        console.error("Error destroying peer:", e)
+      }
+    }
+
+    // Create a new peer without specifying a server (use default)
+    const fallbackPeer = new Peer(generateRandomId(), {
+      debug: 1,
+      config: {
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }, { urls: "stun:global.stun.twilio.com:3478" }],
+      },
+    })
+
+    peerRef.current = fallbackPeer
+    ;(window as any).peerInstance = fallbackPeer
+
+    // Set up the same event handlers for the fallback peer
+    setupPeerEventHandlers(fallbackPeer)
+  }
+
   return (
     <div className="fixed bottom-4 left-4 z-50 bg-black/80 p-2 rounded text-white text-sm">
       <div className="font-bold">Connection Status:</div>
       <div>{connectionStatus}</div>
       {errorMessage && <div className="text-red-400 font-bold mt-1">{errorMessage}</div>}
-      <div className="mt-1">My Peer ID: {myPeerId}</div>
+      <div className="mt-1">My Peer ID: {myPeerId || "Not connected"}</div>
       <div>Connected Peers: {connectedPeers.length}</div>
       {connectedPeers.length > 0 && (
         <div className="mt-1 text-xs">
@@ -470,9 +602,12 @@ export function PeerConnectionManager({
           </ul>
         </div>
       )}
-      <div className="mt-2">
+      <div className="mt-2 flex gap-2">
         <button onClick={handleReconnect} className="bg-blue-600 text-white px-2 py-1 text-xs rounded">
           Reconnect
+        </button>
+        <button onClick={handleTryAlternative} className="bg-green-600 text-white px-2 py-1 text-xs rounded">
+          Try Alternative
         </button>
       </div>
     </div>

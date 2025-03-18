@@ -44,8 +44,68 @@ export class PlayerModel extends THREE.Group {
     outline.position.y = capsuleRadius + capsuleLength / 2
     this.add(outline)
 
+    // Add googly eyes
+    this.addGooglyEyes(capsuleRadius, capsuleLength)
+
     // Position the player
     this.position.copy(position)
+  }
+
+  addGooglyEyes(capsuleRadius: number, capsuleLength: number) {
+    // Eye socket material (white part)
+    const eyeSocketMaterial = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.1,
+      metalness: 0.1,
+    })
+
+    // Pupil material (black part that moves)
+    const pupilMaterial = new THREE.MeshStandardMaterial({
+      color: 0x000000,
+      roughness: 0.1,
+      metalness: 0.1,
+    })
+
+    // Create eye sockets
+    const eyeRadius = capsuleRadius * 0.3
+    const eyeDistance = capsuleRadius * 0.6
+    const eyeYPosition = capsuleRadius + capsuleLength * 0.7 // Position eyes near top of player
+
+    // Left eye socket
+    const leftEyeSocket = new THREE.Mesh(new THREE.SphereGeometry(eyeRadius, 16, 16), eyeSocketMaterial)
+    leftEyeSocket.position.set(-eyeDistance, eyeYPosition, capsuleRadius * 0.8)
+    this.add(leftEyeSocket)
+
+    // Right eye socket
+    const rightEyeSocket = new THREE.Mesh(new THREE.SphereGeometry(eyeRadius, 16, 16), eyeSocketMaterial)
+    rightEyeSocket.position.set(eyeDistance, eyeYPosition, capsuleRadius * 0.8)
+    this.add(rightEyeSocket)
+
+    // Left pupil (smaller than the socket)
+    const leftPupil = new THREE.Mesh(new THREE.SphereGeometry(eyeRadius * 0.6, 16, 16), pupilMaterial)
+    leftPupil.position.set(-eyeDistance, eyeYPosition, capsuleRadius * 0.8 + eyeRadius * 0.5)
+    this.add(leftPupil)
+
+    // Right pupil
+    const rightPupil = new THREE.Mesh(new THREE.SphereGeometry(eyeRadius * 0.6, 16, 16), pupilMaterial)
+    rightPupil.position.set(eyeDistance, eyeYPosition, capsuleRadius * 0.8 + eyeRadius * 0.5)
+    this.add(rightPupil)
+
+    // Animate the pupils for googly eye effect
+    const animate = () => {
+      const time = Date.now() * 0.001
+
+      // Create random movement effect
+      leftPupil.position.x = -eyeDistance + Math.sin(time * 2.3) * (eyeRadius * 0.3)
+      leftPupil.position.y = eyeYPosition + Math.cos(time * 1.7) * (eyeRadius * 0.3)
+
+      rightPupil.position.x = eyeDistance + Math.cos(time * 1.9) * (eyeRadius * 0.3)
+      rightPupil.position.y = eyeYPosition + Math.sin(time * 2.5) * (eyeRadius * 0.3)
+
+      requestAnimationFrame(animate)
+    }
+
+    animate()
   }
 }
 

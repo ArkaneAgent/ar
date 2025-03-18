@@ -45,10 +45,25 @@ export default function Gallery({ username }: GalleryProps) {
   const [myId, setMyId] = useState<string>("")
   const playerPositionRef = useRef<THREE.Vector3>(new THREE.Vector3(0, 1.6, 5))
   const playerRotationRef = useRef<number>(0)
+  const myPlayerRef = useRef<{ model: PlayerModel | null; nameSprite: TextSprite | null }>({
+    model: null,
+    nameSprite: null,
+  })
+  const [debugMode, setDebugMode] = useState(false)
+  const [canvasInteractionEnabled, setCanvasInteractionEnabled] = useState(true)
+
+  // Function to handle entering drawing mode - defined at component level
+  const enterDrawingMode = (canvasObj: THREE.Mesh) => {
+    console.log("Entering drawing mode from component level")
+    setDrawingMode(true)
+    setCurrentCanvas(canvasObj)
+  }
 
   // Scene setup
   useEffect(() => {
     if (!containerRef.current) return
+
+    console.log("Setting up gallery with username:", username)
 
     // Scene setup
     const scene = new THREE.Scene()
@@ -115,16 +130,18 @@ export default function Gallery({ username }: GalleryProps) {
           }
           break
         case "KeyE":
-          // Log the key press for debugging
-          console.log("E key pressed", {
-            nearbyCanvas: nearbyCanvas ? nearbyCanvas.userData?.id : null,
-            drawingMode,
-            isLocked: controls.isLocked,
-          })
+          if (canvasInteractionEnabled && nearbyCanvas && !drawingMode && controls.isLocked) {
+            console.log("E key pressed in main event listener, entering drawing mode")
 
-          if (nearbyCanvas && !drawingMode && controls.isLocked) {
-            console.log("Entering drawing mode for canvas:", nearbyCanvas.userData?.id)
-            enterDrawingMode(nearbyCanvas)
+            // Unlock controls first
+            controls.unlock()
+
+            // Small delay to ensure controls are unlocked
+            setTimeout(() => {
+              setDrawingMode(true)
+              setCurrentCanvas(nearbyCanvas)
+              console.log("Drawing mode activated from E key press")
+            }, 100)
           }
           break
       }
@@ -288,12 +305,12 @@ export default function Gallery({ username }: GalleryProps) {
       playerRotationRef.current = camera.rotation.y
 
       // Update our own player model if it exists
-      if (myId && players[myId]?.model) {
-        players[myId].model.position.copy(playerPosition)
-        players[myId].model.rotation.y = camera.rotation.y
+      if (myId && myPlayerRef.current.model) {
+        myPlayerRef.current.model.position.copy(playerPosition)
+        myPlayerRef.current.model.rotation.y = camera.rotation.y
 
-        if (players[myId].nameSprite) {
-          players[myId].nameSprite.position.set(
+        if (myPlayerRef.current.nameSprite) {
+          myPlayerRef.current.nameSprite.position.set(
             playerPosition.x,
             playerPosition.y + 2.9, // Increased height for name tag
             playerPosition.z,
@@ -626,8 +643,7 @@ export default function Gallery({ username }: GalleryProps) {
       canvases.push(canvas)
     }
 
-    let checkCanvasInteraction = () => {}
-    checkCanvasInteraction = () => {
+    function checkCanvasInteraction() {
       // Cast a ray from the camera center
       raycaster.setFromCamera(new THREE.Vector2(0, 0), camera)
 
@@ -641,6 +657,7 @@ export default function Gallery({ username }: GalleryProps) {
           console.log("Looking at canvas:", canvasObject.userData?.id, "Distance:", intersects[0].distance)
           setNearbyCanvas(canvasObject)
           setInteractionPrompt("Press E to draw on canvas")
+          setCanvasInteractionEnabled(true)
         }
       } else if (nearbyCanvas) {
         console.log("No longer looking at a canvas")
@@ -649,28 +666,11 @@ export default function Gallery({ username }: GalleryProps) {
       }
     }
 
-    let enterDrawingMode = (canvasObj: THREE.Mesh) => {}
-    enterDrawingMode = (canvasObj: THREE.Mesh) => {
-      console.log("Entering drawing mode for canvas:", canvasObj.userData?.id)
-
-      // Force unlock controls if they're locked
-      if (controls.isLocked) {
-        controls.unlock()
-      }
-
-      // Small delay to ensure controls are unlocked before setting drawing mode
-      setTimeout(() => {
-        setDrawingMode(true)
-        setCurrentCanvas(canvasObj)
-        console.log("Drawing mode activated")
-      }, 100)
-    }
-
     function setupPeerConnection() {
       // Generate a random color for this player
       const playerColor = getRandomColor()
 
-      // Create a new Peer
+      // Create a new Peer with a random ID
       const peer = new Peer({
         debug: 2,
         config: {
@@ -702,6 +702,12 @@ export default function Gallery({ username }: GalleryProps) {
           ),
         )
 
+        // Store references to our own model and sprite
+        myPlayerRef.current = {
+          model: playerModel,
+          nameSprite: nameSprite,
+        }
+
         scene.add(playerModel)
         scene.add(nameSprite)
 
@@ -732,6 +738,8 @@ export default function Gallery({ username }: GalleryProps) {
 
         // Send our info to the new peer
         conn.on("open", () => {
+          console.log("Connection opened with peer:", conn.peer)
+
           // Send our player info
           conn.send({
             type: "playerInfo",
@@ -781,7 +789,10 @@ export default function Gallery({ username }: GalleryProps) {
 
       if (connectToPeer && connectToPeer !== peerId) {
         // Connect to the specified peer
-        connectToPeer.split(",").forEach((targetPeerId) => {
+        const peerIds = connectToPeer.split(",")
+        console.log("Connecting to peers:", peerIds)
+
+        peerIds.forEach((targetPeerId) => {
           if (targetPeerId && targetPeerId !== peerId) {
             connectToPeerById(targetPeerId)
           }
@@ -807,7 +818,9 @@ export default function Gallery({ username }: GalleryProps) {
       console.log("Connecting to peer:", targetPeerId)
 
       // Connect to the target peer
-      const conn = peerRef.current.connect(targetPeerId)
+      const conn = peerRef.current.connect(targetPeerId, {
+        reliable: true,
+      })
 
       // Store the connection
       connectionsRef.current[targetPeerId] = conn
@@ -821,6 +834,7 @@ export default function Gallery({ username }: GalleryProps) {
         // Handle different message types
         switch (data.type) {
           case "playerInfo":
+            console.log("Received player info:", data.data)
             handlePlayerInfo(data.data)
             break
 
@@ -842,6 +856,10 @@ export default function Gallery({ username }: GalleryProps) {
         }
       })
 
+      conn.on("open", () => {
+        console.log("Connection opened to peer:", conn.peer)
+      })
+
       conn.on("close", () => {
         console.log("Connection closed with peer:", conn.peer)
 
@@ -858,6 +876,14 @@ export default function Gallery({ username }: GalleryProps) {
     }
 
     function handlePlayerInfo(playerData: any) {
+      // Skip if this is our own player info
+      if (playerData.id === myId) {
+        console.log("Ignoring own player info")
+        return
+      }
+
+      console.log("Creating player model for:", playerData.username)
+
       // Create a new player model
       const playerModel = new PlayerModel(
         playerData.color,
@@ -877,18 +903,33 @@ export default function Gallery({ username }: GalleryProps) {
       scene.add(nameSprite)
 
       // Add to players list
-      setPlayers((prev) => ({
-        ...prev,
-        [playerData.id]: {
-          ...playerData,
-          position: new THREE.Vector3(playerData.position.x, playerData.position.y, playerData.position.z),
-          model: playerModel,
-          nameSprite,
-        },
-      }))
+      setPlayers((prev) => {
+        // If player already exists, remove old models first
+        if (prev[playerData.id]) {
+          if (prev[playerData.id].model) {
+            scene.remove(prev[playerData.id].model)
+          }
+          if (prev[playerData.id].nameSprite) {
+            scene.remove(prev[playerData.id].nameSprite)
+          }
+        }
+
+        return {
+          ...prev,
+          [playerData.id]: {
+            ...playerData,
+            position: new THREE.Vector3(playerData.position.x, playerData.position.y, playerData.position.z),
+            model: playerModel,
+            nameSprite,
+          },
+        }
+      })
     }
 
     function handlePlayerMove(playerId: string, moveData: any) {
+      // Skip if this is our own movement data
+      if (playerId === myId) return
+
       setPlayers((prev) => {
         if (!prev[playerId]) return prev
 
@@ -966,6 +1007,8 @@ export default function Gallery({ username }: GalleryProps) {
     }
 
     function handlePlayerLeft(playerId: string) {
+      console.log("Player left:", playerId)
+
       setPlayers((prev) => {
         if (!prev[playerId]) return prev
 
@@ -1037,6 +1080,12 @@ export default function Gallery({ username }: GalleryProps) {
       setDrawingMode(false)
       setCurrentCanvas(null)
 
+      // Temporarily disable canvas interaction to prevent immediate re-entry
+      setCanvasInteractionEnabled(false)
+      setTimeout(() => {
+        setCanvasInteractionEnabled(true)
+      }, 500)
+
       // Re-lock controls
       setTimeout(() => {
         controls.lock()
@@ -1062,13 +1111,12 @@ export default function Gallery({ username }: GalleryProps) {
 
       renderer.dispose()
     }
-  }, [username])
+  }, [username, myId])
 
   // Add a direct event listener for the E key at the component level
-  // Add this useEffect after the main useEffect
   useEffect(() => {
     const handleKeyE = (e: KeyboardEvent) => {
-      if (e.code === "KeyE" && !drawingMode && nearbyCanvas && started) {
+      if (e.code === "KeyE" && !drawingMode && nearbyCanvas && started && canvasInteractionEnabled) {
         console.log("E key pressed at component level")
         e.preventDefault()
         enterDrawingMode(nearbyCanvas)
@@ -1077,7 +1125,20 @@ export default function Gallery({ username }: GalleryProps) {
 
     window.addEventListener("keydown", handleKeyE)
     return () => window.removeEventListener("keydown", handleKeyE)
-  }, [nearbyCanvas, drawingMode, started])
+  }, [nearbyCanvas, drawingMode, started, canvasInteractionEnabled])
+
+  // Add a click handler for canvases
+  useEffect(() => {
+    const handleClick = () => {
+      if (nearbyCanvas && !drawingMode && started && canvasInteractionEnabled) {
+        console.log("Canvas clicked, entering drawing mode")
+        enterDrawingMode(nearbyCanvas)
+      }
+    }
+
+    window.addEventListener("click", handleClick)
+    return () => window.removeEventListener("click", handleClick)
+  }, [nearbyCanvas, drawingMode, started, canvasInteractionEnabled])
 
   const connectionInfoText = myId ? (
     <div className="absolute bottom-4 left-4 z-10 rounded bg-black/70 p-2 text-white">
@@ -1085,13 +1146,32 @@ export default function Gallery({ username }: GalleryProps) {
       <p className="text-xs">{window.location.href}</p>
       <p className="mt-2 text-xs">You can open this URL in multiple browsers to test multiplayer.</p>
       <p className="text-xs">Each browser creates a separate player with its own connection.</p>
+      <p className="mt-2 text-xs font-bold">Connected players: {Object.keys(players).length}</p>
     </div>
   ) : null
 
-  // Add a debug overlay to help troubleshoot canvas interaction
-  // Add this at the end of the component, just before the return statement
-
-  const [debugMode, setDebugMode] = useState(false)
+  // Debug overlay
+  const debugOverlay = debugMode ? (
+    <div className="absolute top-4 right-4 z-10 bg-black/80 p-3 text-white text-xs max-w-xs overflow-auto max-h-96">
+      <h3 className="font-bold mb-1">Debug Info:</h3>
+      <p>Near Canvas: {nearbyCanvas ? nearbyCanvas.userData?.id : "none"}</p>
+      <p>Drawing Mode: {drawingMode ? "true" : "false"}</p>
+      <p>Controls Locked: {started ? "true" : "false"}</p>
+      <p>Canvas Interaction Enabled: {canvasInteractionEnabled ? "true" : "false"}</p>
+      <p>
+        Player Position:{" "}
+        {JSON.stringify({
+          x: playerPositionRef.current.x.toFixed(2),
+          y: playerPositionRef.current.y.toFixed(2),
+          z: playerPositionRef.current.z.toFixed(2),
+        })}
+      </p>
+      <p>My ID: {myId}</p>
+      <p>Players Connected: {Object.keys(players).length}</p>
+      <p>Player List: {Object.keys(players).join(", ")}</p>
+      <p className="mt-2 text-gray-400">Press Alt+D to toggle debug</p>
+    </div>
+  ) : null
 
   // Toggle debug mode with the "D" key
   useEffect(() => {
@@ -1105,27 +1185,6 @@ export default function Gallery({ username }: GalleryProps) {
     return () => window.removeEventListener("keydown", handleKeyPress)
   }, [])
 
-  // Add this to the return statement, just before the closing div
-  const debugOverlay = debugMode ? (
-    <div className="absolute top-4 right-4 z-10 bg-black/80 p-3 text-white text-xs max-w-xs overflow-auto max-h-96">
-      <h3 className="font-bold mb-1">Debug Info:</h3>
-      <p>Near Canvas: {nearbyCanvas ? nearbyCanvas.userData?.id : "none"}</p>
-      <p>Drawing Mode: {drawingMode ? "true" : "false"}</p>
-      <p>Controls Locked: {started ? "true" : "false"}</p>
-      <p>
-        Player Position:{" "}
-        {JSON.stringify({
-          x: playerPositionRef.current.x.toFixed(2),
-          y: playerPositionRef.current.y.toFixed(2),
-          z: playerPositionRef.current.z.toFixed(2),
-        })}
-      </p>
-      <p>Players Connected: {Object.keys(players).length}</p>
-      <p className="mt-2 text-gray-400">Press Alt+D to toggle debug</p>
-    </div>
-  ) : null
-
-  // Modify the return statement to include the debug overlay
   return (
     <div ref={containerRef} className="h-screen w-screen">
       {!started && !drawingMode && <Instructions onClick={() => {}} />}

@@ -33,8 +33,8 @@ export function Instructions({ onClick }: InstructionsProps) {
 
       <div className="mt-4 border-t border-white/30 pt-2">
         <p className="text-yellow-300 font-bold">Multiplayer Tips:</p>
-        <p className="text-xs mt-1">• Press I to see your share link</p>
-        <p className="text-xs">• Copy and share the URL to invite others</p>
+        <p className="text-xs mt-1">• Look for the black box in the top-left with your share URL</p>
+        <p className="text-xs">• Copy and share this URL to invite others</p>
         <p className="text-xs">• Each browser window creates a separate player</p>
         <p className="text-xs">• Drawings are shared with all players</p>
       </div>

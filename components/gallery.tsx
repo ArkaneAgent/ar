@@ -44,7 +44,6 @@ export default function Gallery({ username }: GalleryProps) {
   const [players, setPlayers] = useState<Record<string, Player>>({})
   const [myId, setMyId] = useState<string>("")
   const [shareUrl, setShareUrl] = useState<string>("")
-  const [connectionStatus, setConnectionStatus] = useState<"connecting" | "connected" | "error" | "">("")
   const playerPositionRef = useRef<THREE.Vector3>(new THREE.Vector3(0, 1.6, 5))
   const playerRotationRef = useRef<number>(0)
   const myPlayerRef = useRef<{ model: PlayerModel | null; nameSprite: TextSprite | null }>({
@@ -54,7 +53,7 @@ export default function Gallery({ username }: GalleryProps) {
   const [debugMode, setDebugMode] = useState(false)
   const [canvasInteractionEnabled, setCanvasInteractionEnabled] = useState(true)
   const [peerInitialized, setPeerInitialized] = useState(false)
-  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const [showShareInfo, setShowShareInfo] = useState(false)
 
   // Function to handle entering drawing mode - defined at component level
   const enterDrawingMode = (canvasObj: THREE.Mesh) => {
@@ -148,6 +147,10 @@ export default function Gallery({ username }: GalleryProps) {
             }, 100)
           }
           break
+        case "KeyI":
+          // Toggle share info
+          setShowShareInfo((prev) => !prev)
+          break
       }
     }
 
@@ -218,169 +221,7 @@ export default function Gallery({ username }: GalleryProps) {
     placeCanvases()
 
     // Setup peer connection for multiplayer
-    function setupPeerConnection() {
-      if (peerInitialized) {
-        console.log("Peer already initialized, skipping setup")
-        return
-      }
-
-      // Generate a random color for this player
-      const playerColor = getRandomColor()
-
-      setConnectionStatus("connecting")
-
-      // Create a new Peer with a random ID
-      const peer = new Peer({
-        debug: 1, // Reduce debug level for better performance
-        config: {
-          iceServers: [
-            { urls: "stun:stun.l.google.com:19302" }, 
-            { urls: "stun:global.stun.twilio.com:3478" },
-            { urls: "stun:stun1.l.google.com:19302" },
-            { urls: "stun:stun2.l.google.com:19302" }
-          ],
-        },
-      })
-
-      peerRef.current = peer
-      setPeerInitialized(true)
-
-      // On connection established
-      peer.on("open", (id) => {
-        console.log("My peer ID is:", id)
-        setMyId(id)
-        setConnectionStatus("connected")
-
-        // IMPORTANT: Clean up any existing player models before creating new ones
-        if (myPlayerRef.current.model) {
-          scene.remove(myPlayerRef.current.model)
-        }
-        if (myPlayerRef.current.nameSprite) {
-          scene.remove(myPlayerRef.current.nameSprite)
-        }
-
-        // Join the gallery by connecting to a signaling server or known peers
-        joinGallery(id, playerColor)
-
-        // Create a player model for ourselves (so others can see us)
-        // Set y position explicitly to 1.6 to ensure consistent height
-        const playerPos = new THREE.Vector3(playerPosition.x, 1.6, playerPosition.z)
-        const playerModel = new PlayerModel(playerColor, playerPos)
-
-        const nameSprite = new TextSprite(
-          username,
-          new THREE.Vector3(
-            playerPos.x,
-            playerPos.y + 2.2, // Position above player
-            playerPos.z,
-          ),
-        )
-
-        // Store references to our own model and sprite
-        myPlayerRef.current = {
-          model: playerModel,
-          nameSprite: nameSprite,
-        }
-
-        scene.add(playerModel)
-        scene.add(nameSprite)
-
-        // Add ourselves to the players list - REPLACE existing entry if it exists
-        setPlayers((prev) => {
-          // Create a new object without our previous entry (if it exists)
-          const newPlayers = { ...prev }
-
-          // If we already had an entry, remove it
-          if (newPlayers[id]) {
-            delete newPlayers[id]
-          }
-
-          // Add our new entry
-          return {
-            ...newPlayers,
-            [id]: {
-              id,
-              username,
-              position: playerPos,
-              rotation: playerRotationRef.current,
-              color: playerColor,
-              model: playerModel,
-              nameSprite,
-            },
-          }
-        })
-      })
-
-      // Handle incoming connections
-      peer.on("connection", (conn) => {
-        console.log("Incoming connection from:", conn.peer)
-
-        // Store the connection
-        connectionsRef.current[conn.peer] = conn
-
-        // Handle data from this peer
-        setupConnectionHandlers(conn)
-
-        // Send our info to the new peer
-        conn.on("open", () => {
-          console.log("Connection opened with peer:", conn.peer)
-
-          // Send our player info
-          conn.send({
-            type: "playerInfo",
-            data: {
-              id: peer.id,
-              username,
-              position: {
-                x: playerPosition.x,
-                y: 1.6, // Ensure consistent height
-                z: playerPosition.z,
-              },
-              rotation: playerRotationRef.current,
-              color: playerColor,
-            },
-          })
-
-          // Send canvas data
-          canvases.forEach((canvas) => {
-            const canvasId = canvas.userData.id
-            const savedData = localStorage.getItem(`canvas-${canvasId}`)
-
-            if (savedData) {
-              conn.send({
-                type: "canvasData",
-                data: {
-                  canvasId,
-                  imageData: savedData,
-                },
-              })
-            }
-          })
-        })
-      })
-
-      // Handle errors
-      peer.on("error", (err) => {
-        console.error("Peer error:", err)
-        setConnectionStatus("error")
-        
-        // If error is due to peer already taken, try to reconnect with a new ID
-        if (err.type === 'unavailable-id') {
-          console.log("Peer ID already taken, creating a new one")
-          peer.disconnect()
-          peer.destroy()
-          setPeerInitialized(false)
-          setTimeout(setupPeerConnection, 1000)
-        }
-      })
-
-      peer.on("disconnected", () => {
-        console.log("Peer disconnected, attempting to reconnect")
-        peer.reconnect()
-      })
-
-      return peer
-    }
+    setupPeerConnection()
 
     // Animation loop
     let prevTime = performance.now()
@@ -769,6 +610,7 @@ export default function Gallery({ username }: GalleryProps) {
             if (savedData.timestamp && currentTime - savedData.timestamp < 1800000) {
               // Load the saved image
               const img = new Image()
+              img.crossOrigin = "anonymous"
               img.onload = () => {
                 offCtx.drawImage(img, 0, 0)
                 canvasTexture.needsUpdate = true
@@ -840,77 +682,200 @@ export default function Gallery({ username }: GalleryProps) {
       }
     }
 
-    function joinGallery(peerId: string, playerColor: string) {
-      try {
-        // Check if there's a peer ID in the URL to connect to
-        const urlParams = new URLSearchParams(window.location.search)
-        const connectToPeer = urlParams.get("p") || urlParams.get("peer") // Support both formats
+    function setupPeerConnection() {
+      if (peerInitialized) {
+        console.log("Peer already initialized, skipping setup")
+        return
+      }
 
-        if (connectToPeer && connectToPeer !== peerId) {
-          // Connect to the specified peer
-          const peerIds = connectToPeer.split(",")
-          console.log("Connecting to peers:", peerIds)
+      // Generate a random color for this player
+      const playerColor = getRandomColor()
 
-          // Try to connect to each peer
-          let connectedToAny = false;
-          peerIds.forEach((targetPeerId) => {
-            if (targetPeerId && targetPeerId !== peerId && targetPeerId.trim() !== "") {
-              connectToPeerById(targetPeerId.trim())
-              connectedToAny = true;
-            }
-          })
+      // Create a new Peer with a random ID
+      const peer = new Peer({
+        debug: 1, // Reduce debug level for better performance
+        config: {
+          iceServers: [{ urls: "stun:stun.l.google.com:19302" }, { urls: "stun:global.stun.twilio.com:3478" }],
+        },
+      })
 
-          // Don't modify the URL if we're connecting to an existing peer
-          console.log("Joining existing gallery with peer:", connectToPeer)
-          
-          // Set the share URL
-          const baseUrl = window.location.origin + window.location.pathname
-          const newUrl = `${baseUrl}?p=${connectToPeer},${peerId}`
-          setShareUrl(newUrl)
-        } else {
-          // Only update the URL if we're creating a new gallery
-          const baseUrl = window.location.origin + window.location.pathname
-          const newUrl = `${baseUrl}?p=${peerId}`
-          window.history.replaceState({}, "", newUrl)
-          setShareUrl(newUrl)
-          console.log("Created new gallery with peer ID:", peerId)
+      peerRef.current = peer
+      setPeerInitialized(true)
+
+      // On connection established
+      peer.on("open", (id) => {
+        console.log("My peer ID is:", id)
+        setMyId(id)
+
+        // IMPORTANT: Clean up any existing player models before creating new ones
+        if (myPlayerRef.current.model) {
+          scene.remove(myPlayerRef.current.model)
+        }
+        if (myPlayerRef.current.nameSprite) {
+          scene.remove(myPlayerRef.current.nameSprite)
         }
 
-        // Display connection info
-        console.log("Share this URL for others to join:", window.location.href)
-      } catch (error) {
-        console.error("Error in joinGallery:", error)
+        // Join the gallery by connecting to a signaling server or known peers
+        joinGallery(id, playerColor)
+
+        // Create a player model for ourselves (so others can see us)
+        // Set y position explicitly to 1.6 to ensure consistent height
+        const playerPos = new THREE.Vector3(playerPosition.x, 1.6, playerPosition.z)
+        const playerModel = new PlayerModel(playerColor, playerPos)
+
+        const nameSprite = new TextSprite(
+          username,
+          new THREE.Vector3(
+            playerPos.x,
+            playerPos.y + 2.2, // Position above player
+            playerPos.z,
+          ),
+        )
+
+        // Store references to our own model and sprite
+        myPlayerRef.current = {
+          model: playerModel,
+          nameSprite: nameSprite,
+        }
+
+        scene.add(playerModel)
+        scene.add(nameSprite)
+
+        // Add ourselves to the players list - REPLACE existing entry if it exists
+        setPlayers((prev) => {
+          // Create a new object without our previous entry (if it exists)
+          const newPlayers = { ...prev }
+
+          // If we already had an entry, remove it
+          if (newPlayers[id]) {
+            delete newPlayers[id]
+          }
+
+          // Add our new entry
+          return {
+            ...newPlayers,
+            [id]: {
+              id,
+              username,
+              position: playerPos,
+              rotation: playerRotationRef.current,
+              color: playerColor,
+              model: playerModel,
+              nameSprite,
+            },
+          }
+        })
+      })
+
+      // Handle incoming connections
+      peer.on("connection", (conn) => {
+        console.log("Incoming connection from:", conn.peer)
+
+        // Store the connection
+        connectionsRef.current[conn.peer] = conn
+
+        // Handle data from this peer
+        setupConnectionHandlers(conn)
+
+        // Send our info to the new peer
+        conn.on("open", () => {
+          console.log("Connection opened with peer:", conn.peer)
+
+          // Send our player info
+          conn.send({
+            type: "playerInfo",
+            data: {
+              id: peer.id,
+              username,
+              position: {
+                x: playerPosition.x,
+                y: 1.6, // Ensure consistent height
+                z: playerPosition.z,
+              },
+              rotation: playerRotationRef.current,
+              color: playerColor,
+            },
+          })
+
+          // Send canvas data
+          canvases.forEach((canvas) => {
+            const canvasId = canvas.userData.id
+            const savedData = localStorage.getItem(`canvas-${canvasId}`)
+
+            if (savedData) {
+              conn.send({
+                type: "canvasData",
+                data: {
+                  canvasId,
+                  imageData: savedData,
+                },
+              })
+            }
+          })
+        })
+      })
+
+      // Handle errors
+      peer.on("error", (err) => {
+        console.error("Peer error:", err)
+      })
+
+      return peer
+    }
+
+    function joinGallery(peerId: string, playerColor: string) {
+      // Check if there's a peer ID in the URL to connect to
+      const urlParams = new URLSearchParams(window.location.search)
+      const connectToPeer = urlParams.get("p") || urlParams.get("peer") // Support both formats
+
+      if (connectToPeer && connectToPeer !== peerId) {
+        // Connect to the specified peer
+        const peerIds = connectToPeer.split(",")
+        console.log("Connecting to peers:", peerIds)
+
+        peerIds.forEach((targetPeerId) => {
+          if (targetPeerId && targetPeerId !== peerId) {
+            connectToPeerById(targetPeerId)
+          }
+        })
+
+        // Don't modify the URL if we're connecting to an existing peer
+        console.log("Joining existing gallery with peer:", connectToPeer)
+
+        // Set the share URL to the current URL
+        setShareUrl(window.location.href)
+      } else {
+        // Only update the URL if we're creating a new gallery
+        const baseUrl = window.location.origin + window.location.pathname
+        const newUrl = `${baseUrl}?p=${peerId}`
+        window.history.replaceState({}, "", newUrl)
+        setShareUrl(newUrl)
+        console.log("Created new gallery with peer ID:", peerId)
       }
+
+      // Display connection info
+      console.log("Share this URL for others to join:", window.location.href)
+      setShareUrl(window.location.href)
+
+      // Show share info by default
+      setShowShareInfo(true)
     }
 
     function connectToPeerById(targetPeerId: string) {
-      if (!peerRef.current) {
-        console.error("PeerRef is null, cannot connect to peer:", targetPeerId)
-        return;
-      }
+      if (!peerRef.current) return
 
-      try {
-        console.log("Connecting to peer:", targetPeerId)
+      console.log("Connecting to peer:", targetPeerId)
 
-        // Check if we're already connected to this peer
-        if (connectionsRef.current[targetPeerId]) {
-          console.log("Already connected to peer:", targetPeerId)
-          return;
-        }
+      // Connect to the target peer
+      const conn = peerRef.current.connect(targetPeerId, {
+        reliable: true,
+      })
 
-        // Connect to the target peer
-        const conn = peerRef.current.connect(targetPeerId, {
-          reliable: true,
-        })
+      // Store the connection
+      connectionsRef.current[targetPeerId] = conn
 
-        // Store the connection
-        connectionsRef.current[targetPeerId] = conn
-
-        // Setup handlers for this connection
-        setupConnectionHandlers(conn)
-      } catch (error) {
-        console.error("Error connecting to peer:", targetPeerId, error)
-      }
+      // Setup handlers for this connection
+      setupConnectionHandlers(conn)
     }
 
     function setupConnectionHandlers(conn: Peer.DataConnection) {
@@ -1238,7 +1203,7 @@ export default function Gallery({ username }: GalleryProps) {
 
       renderer.dispose()
     }
-  }, [username])
+  }, [username, myId, peerInitialized])
 
   // Add a direct event listener for the E key at the component level
   useEffect(() => {
@@ -1271,8 +1236,9 @@ export default function Gallery({ username }: GalleryProps) {
   useEffect(() => {
     const handleEsc = (e: KeyboardEvent) => {
       if (e.key === "Escape" && drawingMode) {
-        if (window.exitDrawingMode && canvasRef.current) {
-          window.exitDrawingMode(canvasRef.current)
+        if (window.exitDrawingMode && document.querySelector("canvas")) {
+          const canvas = document.querySelector("canvas") as HTMLCanvasElement
+          window.exitDrawingMode(canvas)
         } else {
           // Force exit drawing mode
           setDrawingMode(false)
@@ -1285,27 +1251,39 @@ export default function Gallery({ username }: GalleryProps) {
     return () => window.removeEventListener("keydown", handleEsc)
   }, [drawingMode])
 
-  const connectionInfoText = myId ? (
-    <div className="absolute bottom-4 left-4 z-10 rounded bg-black/70 p-2 text-white">
-      <p>Share this URL for others to join:</p>
-      <p
-        className="text-xs select-all cursor-pointer"
-        onClick={() => {
-          navigator.clipboard.writeText(shareUrl)
-          alert("URL copied to clipboard!")
-        }}
-      >
-        {shareUrl}
-      </p>
-      <p className="mt-2 text-xs">Click the URL above to copy it to clipboard</p>
-      <p className="text-xs">Each browser creates a separate player with its own connection.</p>
-      <p className="mt-2 text-xs font-bold">
-        Connected players: {Object.keys(players).length}
-        {connectionStatus === "connecting" && " (Connecting...)"}
-        {connectionStatus === "error" && " (Connection error, try refreshing)"}
-      </p>
-    </div>
-  ) : null
+  // Always show share info when myId is available
+  useEffect(() => {
+    if (myId) {
+      setShowShareInfo(true)
+    }
+  }, [myId])
+
+  const connectionInfoText =
+    myId && showShareInfo ? (
+      <div className="absolute top-4 left-4 z-10 rounded bg-black/90 p-4 text-white shadow-lg border-2 border-green-500">
+        <div className="flex justify-between items-center mb-2">
+          <h3 className="text-xl font-bold">Multiplayer Link</h3>
+          <button onClick={() => setShowShareInfo(false)} className="text-white hover:text-gray-300">
+            ✕
+          </button>
+        </div>
+        <p className="mb-2">Share this URL for others to join:</p>
+        <div className="bg-gray-800 p-2 rounded mb-2 flex items-center">
+          <p className="text-sm select-all cursor-pointer overflow-auto max-w-xs">{shareUrl}</p>
+          <button
+            onClick={() => {
+              navigator.clipboard.writeText(shareUrl)
+              alert("URL copied to clipboard!")
+            }}
+            className="ml-2 bg-green-600 px-2 py-1 rounded text-sm hover:bg-green-700"
+          >
+            Copy
+          </button>
+        </div>
+        <p className="text-xs mt-2">Press I to toggle this info panel</p>
+        <p className="text-xs">Connected players: {Object.keys(players).length}</p>
+      </div>
+    ) : null
 
   // Debug overlay
   const debugOverlay = debugMode ? (
@@ -1337,11 +1315,26 @@ export default function Gallery({ username }: GalleryProps) {
       if (e.code === "KeyD" && e.altKey) {
         setDebugMode((prev) => !prev)
       }
+      if (e.code === "KeyI") {
+        setShowShareInfo((prev) => !prev)
+      }
     }
 
     window.addEventListener("keydown", handleKeyPress)
     return () => window.removeEventListener("keydown", handleKeyPress)
   }, [])
+
+  // Floating info button to show share info
+  const infoButton =
+    !showShareInfo && myId ? (
+      <button
+        onClick={() => setShowShareInfo(true)}
+        className="absolute top-4 left-4 z-10 bg-green-600 p-2 rounded-full text-white shadow-lg hover:bg-green-700 animate-pulse"
+        title="Show multiplayer link"
+      >
+        i
+      </button>
+    ) : null
 
   return (
     <div ref={containerRef} className="h-screen w-screen">
@@ -1352,6 +1345,7 @@ export default function Gallery({ username }: GalleryProps) {
       {drawingMode && currentCanvas && <DrawingInterface />}
 
       {connectionInfoText}
+      {infoButton}
 
       {debugOverlay}
     </div>

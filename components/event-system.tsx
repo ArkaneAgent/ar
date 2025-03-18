@@ -9,21 +9,12 @@ export function EventSystem() {
       const customEvent = event as CustomEvent
       const { position, rotation } = customEvent.detail
 
-      // Find all peer connections
-      const peerConnections = Object.values((window as any).peerConnections || {})
-
-      // Send position update to all connections
-      peerConnections.forEach((conn: any) => {
-        if (conn && conn.send) {
-          conn.send({
-            type: "playerMove",
-            data: {
-              position,
-              rotation,
-            },
-          })
-        }
-      })
+      // Dispatch to the peer connection manager
+      window.dispatchEvent(
+        new CustomEvent("playerPositionUpdate", {
+          detail: { position, rotation },
+        }),
+      )
     }
 
     // Create a global event listener for canvas updates
@@ -31,21 +22,12 @@ export function EventSystem() {
       const customEvent = event as CustomEvent
       const { canvasId, imageData } = customEvent.detail
 
-      // Find all peer connections
-      const peerConnections = Object.values((window as any).peerConnections || {})
-
-      // Send canvas update to all connections
-      peerConnections.forEach((conn: any) => {
-        if (conn && conn.send) {
-          conn.send({
-            type: "updateCanvas",
-            data: {
-              canvasId,
-              imageData,
-            },
-          })
-        }
-      })
+      // Dispatch to the peer connection manager
+      window.dispatchEvent(
+        new CustomEvent("canvasUpdated", {
+          detail: { canvasId, imageData },
+        }),
+      )
     }
 
     // Add event listeners

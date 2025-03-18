@@ -210,16 +210,15 @@ export function DrawingInterface() {
 
         <button
           onClick={saveAndClose}
-          className="rounded bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700"
+          className="rounded bg-green-600 px-6 py-3 text-lg font-bold text-white hover:bg-green-700 animate-pulse"
         >
-          Save & Close
+          SAVE & CLOSE
         </button>
       </div>
 
       <div className="mt-3 text-center text-white">
-        <p>Press ESC to save and exit</p>
+        <p className="text-lg font-bold">Press ESC or click SAVE & CLOSE to save and exit</p>
       </div>
     </div>
   )
 }
-

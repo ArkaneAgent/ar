@@ -21,11 +21,10 @@ export function PeerConnectionManager({
   onCanvasUpdated,
 }: PeerConnectionManagerProps) {
   const [myPeerId, setMyPeerId] = useState<string>("")
-  const [connections, setConnections] = useState<Record<string, Peer.DataConnection>>({})
-  const [isHost, setIsHost] = useState(false)
   const [connectionStatus, setConnectionStatus] = useState("Initializing...")
   const [connectedPeers, setConnectedPeers] = useState<string[]>([])
   const [errorMessage, setErrorMessage] = useState<string>("")
+  const [reconnectCount, setReconnectCount] = useState(0)
 
   // Use refs to maintain access to latest state in event handlers
   const connectionsRef = useRef<Record<string, Peer.DataConnection>>({})
@@ -35,44 +34,50 @@ export function PeerConnectionManager({
   const peerRef = useRef<Peer | null>(null)
   const hasCreatedOwnPlayerRef = useRef<boolean>(false)
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const initializedRef = useRef<boolean>(false)
 
-  useEffect(() => {
-    // Function to generate a random color
-    const getRandomColor = () => {
-      const letters = "0123456789ABCDEF"
-      let color = "#"
-      for (let i = 0; i < 6; i++) {
-        color += letters[Math.floor(Math.random() * 16)]
-      }
-      return color
+  // Function to log with timestamp
+  const log = (message: string) => {
+    const timestamp = new Date().toISOString().substr(11, 8)
+    console.log(`[${timestamp}] ${message}`)
+    setConnectionStatus(message)
+  }
+
+  // Function to generate a random color
+  const getRandomColor = () => {
+    const letters = "0123456789ABCDEF"
+    let color = "#"
+    for (let i = 0; i < 6; i++) {
+      color += letters[Math.floor(Math.random() * 16)]
     }
+    return color
+  }
 
-    // My player color
-    const myColor = getRandomColor()
-    myColorRef.current = myColor
-
-    // Function to log with timestamp
-    const log = (message: string) => {
-      const timestamp = new Date().toISOString().substr(11, 8)
-      console.log(`[${timestamp}] ${message}`)
-      setConnectionStatus(message)
-    }
-
+  // Initialize PeerJS
+  const initializePeer = () => {
     // Clear any existing reconnect timeout
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current)
       reconnectTimeoutRef.current = null
     }
 
-    log("Initializing peer connection...")
+    // If we already have a peer, destroy it
+    if (peerRef.current) {
+      try {
+        peerRef.current.destroy()
+      } catch (e) {
+        console.error("Error destroying peer:", e)
+      }
+    }
 
-    // Check if we're joining an existing room
-    const urlParams = new URLSearchParams(window.location.search)
-    const hostPeerId = urlParams.get("p") || urlParams.get("peer")
+    log(`Initializing peer connection (attempt ${reconnectCount + 1})...`)
+
+    // Generate a random ID to avoid collisions
+    const randomId = Math.random().toString(36).substring(2, 10) + Date.now().toString(36)
 
     // Initialize PeerJS with a specific configuration
-    const peer = new Peer({
-      debug: 2, // Reduced debug level
+    const peer = new Peer(randomId, {
+      debug: 1, // Minimal debug level
       config: {
         iceServers: [
           { urls: "stun:stun.l.google.com:19302" },
@@ -104,15 +109,22 @@ export function PeerConnectionManager({
         const myPosition = { x: 0, y: 1.6, z: 5 }
         myPositionRef.current = myPosition
 
+        // Generate a color for our player
+        const myColor = getRandomColor()
+        myColorRef.current = myColor
+
         // Add ourselves to the player list
         onPlayerJoined(id, username, myColor, myPosition)
         hasCreatedOwnPlayerRef.current = true
         log(`Created my own player model with ID: ${id}`)
       }
 
+      // Check if we're joining an existing room
+      const urlParams = new URLSearchParams(window.location.search)
+      const hostPeerId = urlParams.get("p") || urlParams.get("peer")
+
       // Update URL if we're the host
       if (!hostPeerId) {
-        setIsHost(true)
         const baseUrl = window.location.origin + window.location.pathname
         const newUrl = `${baseUrl}?p=${id}`
 
@@ -122,11 +134,17 @@ export function PeerConnectionManager({
         } catch (e) {
           console.error("Failed to update URL:", e)
         }
-      } else {
+      } else if (hostPeerId !== id) {
         // We're joining an existing room
         log(`Joining room hosted by: ${hostPeerId}`)
         connectToPeer(hostPeerId)
       }
+
+      // Mark as initialized
+      initializedRef.current = true
+
+      // Reset reconnect count
+      setReconnectCount(0)
     })
 
     // Handle incoming connections
@@ -144,9 +162,9 @@ export function PeerConnectionManager({
       if (err.type === "peer-unavailable") {
         log("Host not found. The room may no longer exist.")
         setErrorMessage("Host not found. The room may no longer exist.")
-      } else if (err.type === "network" || err.type === "disconnected") {
-        log("Network error. Attempting to reconnect...")
-        setErrorMessage("Network error. Attempting to reconnect...")
+      } else if (err.type === "network" || err.type === "server-error" || err.type === "disconnected") {
+        log(`${err.type} error. Attempting to reconnect...`)
+        setErrorMessage(`${err.type} error. Attempting to reconnect...`)
 
         // Try to reconnect after a delay
         if (reconnectTimeoutRef.current) {
@@ -155,63 +173,61 @@ export function PeerConnectionManager({
 
         reconnectTimeoutRef.current = setTimeout(() => {
           log("Reconnecting...")
+          setReconnectCount((prev) => prev + 1)
 
-          // Destroy the old peer
-          if (peer) {
-            peer.destroy()
-          }
-
-          // Reload the page to reinitialize everything
-          window.location.reload()
-        }, 5000)
+          // Reinitialize peer
+          initializePeer()
+        }, 3000)
       }
     })
+  }
 
-    // Function to connect to a peer
-    const connectToPeer = (peerId: string) => {
-      if (peerId === myPeerIdRef.current) return
+  // Function to connect to a peer
+  const connectToPeer = (peerId: string) => {
+    if (!peerRef.current || peerId === myPeerIdRef.current) return
 
-      // Check if we're already connected to this peer
-      if (connectionsRef.current[peerId]) {
-        log(`Already connected to peer: ${peerId}`)
-        return
-      }
+    // Check if we're already connected to this peer
+    if (connectionsRef.current[peerId]) {
+      log(`Already connected to peer: ${peerId}`)
+      return
+    }
 
-      log(`Connecting to peer: ${peerId}`)
-      const conn = peer.connect(peerId, {
+    log(`Connecting to peer: ${peerId}`)
+    try {
+      const conn = peerRef.current.connect(peerId, {
         reliable: true,
         metadata: {
           username,
-          color: myColor,
+          color: myColorRef.current,
         },
       })
 
       setupConnection(conn)
+    } catch (error) {
+      console.error("Error connecting to peer:", error)
+      log(`Error connecting to peer: ${error}`)
     }
+  }
 
-    // Function to set up a connection
-    const setupConnection = (conn: Peer.DataConnection) => {
-      // Store the connection
-      connectionsRef.current[conn.peer] = conn
-      ;(window as any).peerConnections[conn.peer] = conn
+  // Function to set up a connection
+  const setupConnection = (conn: Peer.DataConnection) => {
+    // Store the connection
+    connectionsRef.current[conn.peer] = conn
+    ;(window as any).peerConnections[conn.peer] = conn
 
-      setConnections((prev) => ({
-        ...prev,
-        [conn.peer]: conn,
-      }))
+    // Handle connection open
+    conn.on("open", () => {
+      log(`Connection established with: ${conn.peer}`)
+      setConnectedPeers((prev) => [...prev.filter((id) => id !== conn.peer), conn.peer])
 
-      // Handle connection open
-      conn.on("open", () => {
-        log(`Connection established with: ${conn.peer}`)
-        setConnectedPeers((prev) => [...prev.filter((id) => id !== conn.peer), conn.peer])
-
-        // Send my info to the peer
+      // Send my info to the peer
+      try {
         conn.send({
           type: "playerInfo",
           data: {
             id: myPeerIdRef.current,
             username,
-            color: myColor,
+            color: myColorRef.current,
             position: myPositionRef.current,
           },
         })
@@ -221,118 +237,133 @@ export function PeerConnectionManager({
           type: "requestAllPlayers",
           data: {},
         })
-      })
+      } catch (error) {
+        console.error("Error sending initial data:", error)
+      }
+    })
 
-      // Handle incoming data
-      conn.on("data", (data: any) => {
-        try {
-          if (!data || !data.type) {
-            console.error("Received invalid data:", data)
-            return
-          }
+    // Handle incoming data
+    conn.on("data", (data: any) => {
+      try {
+        if (!data || !data.type) {
+          console.error("Received invalid data:", data)
+          return
+        }
 
-          switch (data.type) {
-            case "playerInfo":
-              if (data.data.id === myPeerIdRef.current) {
-                // Skip our own player info to prevent duplication
-                log(`Received my own player info, ignoring`)
-                return
-              }
+        switch (data.type) {
+          case "playerInfo":
+            if (data.data.id === myPeerIdRef.current) {
+              // Skip our own player info to prevent duplication
+              log(`Received my own player info, ignoring`)
+              return
+            }
 
-              log(`Received player info: ${data.data.username} (${data.data.id})`)
-              onPlayerJoined(data.data.id, data.data.username, data.data.color, data.data.position)
-              break
+            log(`Received player info: ${data.data.username} (${data.data.id})`)
+            onPlayerJoined(data.data.id, data.data.username, data.data.color, data.data.position)
+            break
 
-            case "playerMove":
-              if (data.data.id === myPeerIdRef.current) {
-                // Skip our own movement updates
-                return
-              }
+          case "playerMove":
+            onPlayerMoved(data.data.id || conn.peer, data.data.position, data.data.rotation)
+            break
 
-              onPlayerMoved(conn.peer, data.data.position, data.data.rotation)
-              break
+          case "canvasData":
+          case "updateCanvas":
+            log(`Received canvas update for: ${data.data.canvasId}`)
+            onCanvasUpdated(data.data.canvasId, data.data.imageData)
+            break
 
-            case "canvasData":
-            case "updateCanvas":
-              log(`Received canvas update for: ${data.data.canvasId}`)
-              onCanvasUpdated(data.data.canvasId, data.data.imageData)
-              break
+          case "requestAllPlayers":
+            // The new peer is requesting info about all connected players
+            log("Received request for all players")
 
-            case "requestAllPlayers":
-              // The new peer is requesting info about all connected players
-              log("Received request for all players")
+            // Send info about myself
+            conn.send({
+              type: "playerInfo",
+              data: {
+                id: myPeerIdRef.current,
+                username,
+                color: myColorRef.current,
+                position: myPositionRef.current,
+              },
+            })
 
-              // Send info about myself
-              conn.send({
-                type: "playerInfo",
-                data: {
-                  id: myPeerIdRef.current,
-                  username,
-                  color: myColor,
-                  position: myPositionRef.current,
-                },
-              })
-
-              // Forward the request to all other peers to ensure complete network knowledge
-              Object.values(connectionsRef.current).forEach((otherConn) => {
-                if (otherConn.peer !== conn.peer) {
+            // Forward the request to all other peers to ensure complete network knowledge
+            Object.values(connectionsRef.current).forEach((otherConn) => {
+              if (otherConn.peer !== conn.peer) {
+                try {
                   otherConn.send({
                     type: "forwardPlayerInfo",
                     data: {
                       targetPeer: conn.peer,
                     },
                   })
+                } catch (error) {
+                  console.error("Error forwarding player info request:", error)
                 }
-              })
-              break
+              }
+            })
+            break
 
-            case "forwardPlayerInfo":
-              // Someone is requesting that I send my player info to a specific peer
-              const targetPeer = data.data.targetPeer
-              if (connectionsRef.current[targetPeer]) {
+          case "forwardPlayerInfo":
+            // Someone is requesting that I send my player info to a specific peer
+            const targetPeer = data.data.targetPeer
+            if (connectionsRef.current[targetPeer]) {
+              try {
                 connectionsRef.current[targetPeer].send({
                   type: "playerInfo",
                   data: {
                     id: myPeerIdRef.current,
                     username,
-                    color: myColor,
+                    color: myColorRef.current,
                     position: myPositionRef.current,
                   },
                 })
                 log(`Forwarded my player info to: ${targetPeer}`)
+              } catch (error) {
+                console.error("Error sending forwarded player info:", error)
               }
-              break
-          }
-        } catch (error) {
-          console.error("Error processing received data:", error, data)
+            }
+            break
         }
-      })
+      } catch (error) {
+        console.error("Error processing received data:", error, data)
+      }
+    })
 
-      // Handle connection close
-      conn.on("close", () => {
-        log(`Connection closed with: ${conn.peer}`)
+    // Handle connection close
+    conn.on("close", () => {
+      log(`Connection closed with: ${conn.peer}`)
 
-        // Remove the connection
-        delete connectionsRef.current[conn.peer]
-        delete (window as any).peerConnections[conn.peer]
+      // Remove the connection
+      delete connectionsRef.current[conn.peer]
+      delete (window as any).peerConnections[conn.peer]
 
-        setConnections((prev) => {
-          const newConnections = { ...prev }
-          delete newConnections[conn.peer]
-          return newConnections
-        })
+      setConnectedPeers((prev) => prev.filter((id) => id !== conn.peer))
 
-        setConnectedPeers((prev) => prev.filter((id) => id !== conn.peer))
+      // Notify that player left
+      onPlayerLeft(conn.peer)
+    })
 
-        // Notify that player left
-        onPlayerLeft(conn.peer)
-      })
+    // Handle connection error
+    conn.on("error", (err) => {
+      console.error(`Connection error with ${conn.peer}:`, err)
+      log(`Connection error with ${conn.peer}: ${err}`)
 
-      // Handle connection error
-      conn.on("error", (err) => {
-        console.error(`Connection error with ${conn.peer}:`, err)
-        log(`Connection error with ${conn.peer}: ${err}`)
-      })
+      // Remove the connection
+      delete connectionsRef.current[conn.peer]
+      delete (window as any).peerConnections[conn.peer]
+
+      setConnectedPeers((prev) => prev.filter((id) => id !== conn.peer))
+
+      // Notify that player left
+      onPlayerLeft(conn.peer)
+    })
+  }
+
+  // Initialize peer on component mount
+  useEffect(() => {
+    if (!initializedRef.current) {
+      initializePeer()
     }
 
     // Set up event listener for player position updates
@@ -406,15 +437,21 @@ export function PeerConnectionManager({
       })
 
       // Close and destroy the peer
-      if (peer) {
+      if (peerRef.current) {
         try {
-          peer.destroy()
+          peerRef.current.destroy()
         } catch (error) {
           console.error("Error destroying peer:", error)
         }
       }
     }
   }, [username, onPeerConnected, onPlayerJoined, onPlayerMoved, onPlayerLeft, onCanvasUpdated])
+
+  // Function to manually reconnect
+  const handleReconnect = () => {
+    setReconnectCount((prev) => prev + 1)
+    initializePeer()
+  }
 
   return (
     <div className="fixed bottom-4 left-4 z-50 bg-black/80 p-2 rounded text-white text-sm">
@@ -433,9 +470,8 @@ export function PeerConnectionManager({
           </ul>
         </div>
       )}
-      {isHost && <div className="mt-1 text-green-400">You are the host</div>}
       <div className="mt-2">
-        <button onClick={() => window.location.reload()} className="bg-blue-600 text-white px-2 py-1 text-xs rounded">
+        <button onClick={handleReconnect} className="bg-blue-600 text-white px-2 py-1 text-xs rounded">
           Reconnect
         </button>
       </div>

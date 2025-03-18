@@ -9,7 +9,7 @@ import { InteractionPrompt } from "@/components/interaction-prompt"
 import { DrawingInterface } from "@/components/drawing-interface"
 import { PlayerModel } from "@/components/player-model"
 import { TextSprite } from "@/components/text-sprite"
-import Peer from "peerjs"
+import { PeerConnectionManager } from "@/components/peer-connection-manager"
 
 interface Player {
   id: string
@@ -29,13 +29,12 @@ interface GalleryProps {
 declare global {
   interface Window {
     exitDrawingMode: (canvas: HTMLCanvasElement) => void
+    debugLog: (message: string) => void
   }
 }
 
 export default function Gallery({ username }: GalleryProps) {
   const containerRef = useRef<HTMLDivElement>(null)
-  const peerRef = useRef<Peer | null>(null)
-  const connectionsRef = useRef<Record<string, Peer.DataConnection>>({})
   const [started, setStarted] = useState(false)
   const [drawingMode, setDrawingMode] = useState(false)
   const [nearbyCanvas, setNearbyCanvas] = useState<THREE.Mesh | null>(null)
@@ -43,34 +42,228 @@ export default function Gallery({ username }: GalleryProps) {
   const [interactionPrompt, setInteractionPrompt] = useState("")
   const [players, setPlayers] = useState<Record<string, Player>>({})
   const [myId, setMyId] = useState<string>("")
-  const [shareUrl, setShareUrl] = useState<string>("")
   const playerPositionRef = useRef<THREE.Vector3>(new THREE.Vector3(0, 1.6, 5))
   const playerRotationRef = useRef<number>(0)
   const myPlayerRef = useRef<{ model: PlayerModel | null; nameSprite: TextSprite | null }>({
     model: null,
     nameSprite: null,
   })
-  const [debugMode, setDebugMode] = useState(false)
+  const [debugMode, setDebugMode] = useState(true)
   const [canvasInteractionEnabled, setCanvasInteractionEnabled] = useState(true)
-  const [peerInitialized, setPeerInitialized] = useState(false)
-  const [showShareInfo, setShowShareInfo] = useState(false)
+  const [debugLog, setDebugLog] = useState<string[]>([])
+  const sceneRef = useRef<THREE.Scene | null>(null)
+  const canvasesRef = useRef<THREE.Mesh[]>([])
+  const controlsRef = useRef<PointerLockControls | null>(null)
+
+  // Add debug log function
+  const addDebugLog = (message: string) => {
+    console.log(message)
+    setDebugLog((prev) => [...prev.slice(-19), message])
+  }
+
+  // Expose debug log function globally
+  useEffect(() => {
+    window.debugLog = addDebugLog
+  }, [])
 
   // Function to handle entering drawing mode - defined at component level
   const enterDrawingMode = (canvasObj: THREE.Mesh) => {
-    console.log("Entering drawing mode from component level")
+    addDebugLog("Entering drawing mode")
     setDrawingMode(true)
     setCurrentCanvas(canvasObj)
+  }
+
+  // Handle peer connection events
+  const handlePeerConnected = (peerId: string) => {
+    setMyId(peerId)
+    addDebugLog(`Connected with peer ID: ${peerId}`)
+  }
+
+  const handlePlayerJoined = (playerId: string, playerUsername: string, color: string, position: any) => {
+    addDebugLog(`Player joined: ${playerUsername} (${playerId})`)
+
+    // Skip if this is our own player
+    if (playerId === myId) {
+      addDebugLog("Ignoring own player join event")
+      return
+    }
+
+    // Create a new player model if we have a scene
+    if (sceneRef.current) {
+      // Remove any existing model for this player
+      setPlayers((prev) => {
+        if (prev[playerId] && prev[playerId].model) {
+          sceneRef.current?.remove(prev[playerId].model)
+        }
+        if (prev[playerId] && prev[playerId].nameSprite) {
+          sceneRef.current?.remove(prev[playerId].nameSprite)
+        }
+        return prev
+      })
+
+      // Create the player model
+      const playerPos = new THREE.Vector3(position.x, position.y, position.z)
+      const playerModel = new PlayerModel(color, playerPos)
+
+      // Create the name sprite
+      const nameSprite = new TextSprite(playerUsername, new THREE.Vector3(playerPos.x, playerPos.y + 2.2, playerPos.z))
+
+      // Add to scene
+      sceneRef.current.add(playerModel)
+      sceneRef.current.add(nameSprite)
+
+      // Add to players state
+      setPlayers((prev) => ({
+        ...prev,
+        [playerId]: {
+          id: playerId,
+          username: playerUsername,
+          position: playerPos,
+          rotation: 0,
+          color,
+          model: playerModel,
+          nameSprite,
+        },
+      }))
+
+      addDebugLog(`Added player model for: ${playerUsername}`)
+    }
+  }
+
+  const handlePlayerMoved = (playerId: string, position: any, rotation: number) => {
+    // Skip if this is our own movement
+    if (playerId === myId) return
+
+    setPlayers((prev) => {
+      if (!prev[playerId]) return prev
+
+      const updatedPlayer = {
+        ...prev[playerId],
+        position: new THREE.Vector3(position.x, position.y, position.z),
+        rotation,
+      }
+
+      // Update model and name sprite positions
+      if (updatedPlayer.model) {
+        updatedPlayer.model.position.copy(updatedPlayer.position)
+        updatedPlayer.model.rotation.y = updatedPlayer.rotation
+      }
+
+      if (updatedPlayer.nameSprite) {
+        updatedPlayer.nameSprite.position.set(
+          updatedPlayer.position.x,
+          updatedPlayer.position.y + 2.2,
+          updatedPlayer.position.z,
+        )
+      }
+
+      return {
+        ...prev,
+        [playerId]: updatedPlayer,
+      }
+    })
+  }
+
+  const handlePlayerLeft = (playerId: string) => {
+    addDebugLog(`Player left: ${playerId}`)
+
+    setPlayers((prev) => {
+      if (!prev[playerId]) return prev
+
+      // Remove player model and name sprite from scene
+      if (prev[playerId].model && sceneRef.current) {
+        sceneRef.current.remove(prev[playerId].model)
+      }
+
+      if (prev[playerId].nameSprite && sceneRef.current) {
+        sceneRef.current.remove(prev[playerId].nameSprite)
+      }
+
+      const newPlayers = { ...prev }
+      delete newPlayers[playerId]
+      return newPlayers
+    })
+  }
+
+  const handleCanvasUpdated = (canvasId: string, imageData: string) => {
+    addDebugLog(`Canvas updated: ${canvasId}`)
+
+    // Find the canvas
+    const canvas = canvasesRef.current.find((c) => c.userData.id === canvasId)
+    if (!canvas) {
+      addDebugLog(`Canvas not found: ${canvasId}`)
+      return
+    }
+
+    // Update the canvas texture
+    const offScreenCanvas = canvas.userData.offScreenCanvas
+    const offCtx = offScreenCanvas.getContext("2d")
+
+    if (offCtx) {
+      try {
+        let imgData = imageData
+
+        // If imageData is a JSON string, parse it
+        if (typeof imageData === "string" && imageData.startsWith("{")) {
+          try {
+            const parsedData = JSON.parse(imageData)
+            imgData = parsedData.imageData
+          } catch (e) {
+            console.error("Failed to parse JSON imageData:", e)
+          }
+        }
+
+        // Create a new image and load the data
+        const img = new Image()
+        img.crossOrigin = "anonymous"
+
+        img.onload = () => {
+          // Clear the canvas first
+          offCtx.clearRect(0, 0, offScreenCanvas.width, offScreenCanvas.height)
+
+          // Draw the image
+          offCtx.drawImage(img, 0, 0)
+
+          // Update the texture
+          const texture = (canvas.material as THREE.MeshBasicMaterial).map
+          if (texture) {
+            texture.needsUpdate = true
+          }
+
+          // Save to localStorage
+          const canvasData = {
+            imageData: imgData,
+            timestamp: Date.now(),
+          }
+
+          try {
+            localStorage.setItem(`canvas-${canvasId}`, JSON.stringify(canvasData))
+          } catch (e) {
+            console.error("Failed to save canvas data to localStorage:", e)
+          }
+        }
+
+        img.onerror = (e) => {
+          console.error("Error loading image:", e)
+        }
+
+        img.src = imgData
+      } catch (e) {
+        console.error("Error handling canvas data:", e)
+      }
+    }
   }
 
   // Scene setup
   useEffect(() => {
     if (!containerRef.current) return
 
-    console.log("Setting up gallery with username:", username)
+    addDebugLog("Setting up gallery with username: " + username)
 
     // Scene setup
     const scene = new THREE.Scene()
     scene.background = new THREE.Color(0xffffff)
+    sceneRef.current = scene
 
     // Camera
     const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000)
@@ -87,6 +280,7 @@ export default function Gallery({ username }: GalleryProps) {
 
     // Controls
     const controls = new PointerLockControls(camera, document.body)
+    controlsRef.current = controls
 
     // Movement variables
     const velocity = new THREE.Vector3()
@@ -102,6 +296,7 @@ export default function Gallery({ username }: GalleryProps) {
 
     // Array to store canvases
     const canvases: THREE.Mesh[] = []
+    canvasesRef.current = canvases
 
     // Array to store walls for collision detection
     const walls: THREE.Box3[] = []
@@ -134,7 +329,7 @@ export default function Gallery({ username }: GalleryProps) {
           break
         case "KeyE":
           if (canvasInteractionEnabled && nearbyCanvas && !drawingMode && controls.isLocked) {
-            console.log("E key pressed in main event listener, entering drawing mode")
+            addDebugLog("E key pressed, entering drawing mode")
 
             // Unlock controls first
             controls.unlock()
@@ -143,13 +338,8 @@ export default function Gallery({ username }: GalleryProps) {
             setTimeout(() => {
               setDrawingMode(true)
               setCurrentCanvas(nearbyCanvas)
-              console.log("Drawing mode activated from E key press")
             }, 100)
           }
-          break
-        case "KeyI":
-          // Toggle share info
-          setShowShareInfo((prev) => !prev)
           break
       }
     }
@@ -219,9 +409,6 @@ export default function Gallery({ username }: GalleryProps) {
 
     // Place canvases
     placeCanvases()
-
-    // Setup peer connection for multiplayer
-    setupPeerConnection()
 
     // Animation loop
     let prevTime = performance.now()
@@ -328,23 +515,15 @@ export default function Gallery({ username }: GalleryProps) {
             playerPosition.z,
           )
         }
-      }
 
-      // Check for canvas interaction - only do this occasionally for performance
-      if (Math.random() < 0.2) {
-        // Only check 20% of the time
-        checkCanvasInteraction()
-      }
+        // Broadcast position to other players via the custom event
+        if (time - lastUpdateTime > 100) {
+          // 10 updates per second
+          lastUpdateTime = time
 
-      // Send position update to peers (limit to 5 updates per second for better performance)
-      if (time - lastUpdateTime > 200 && peerRef.current) {
-        lastUpdateTime = time
-
-        // Send position update to all connected peers
-        Object.values(connectionsRef.current).forEach((conn) => {
-          conn.send({
-            type: "playerMove",
-            data: {
+          // Dispatch custom event for position update
+          const event = new CustomEvent("playerPositionUpdate", {
+            detail: {
               position: {
                 x: playerPosition.x,
                 y: playerPosition.y,
@@ -353,7 +532,14 @@ export default function Gallery({ username }: GalleryProps) {
               rotation: camera.rotation.y,
             },
           })
-        })
+          window.dispatchEvent(event)
+        }
+      }
+
+      // Check for canvas interaction - only do this occasionally for performance
+      if (Math.random() < 0.2) {
+        // Only check 20% of the time
+        checkCanvasInteraction()
       }
 
       prevTime = time
@@ -670,521 +856,22 @@ export default function Gallery({ username }: GalleryProps) {
 
         // Only update if it's a different canvas or we didn't have one before
         if (!nearbyCanvas || nearbyCanvas.userData?.id !== canvasObject.userData?.id) {
-          console.log("Looking at canvas:", canvasObject.userData?.id, "Distance:", intersects[0].distance)
+          addDebugLog("Looking at canvas: " + canvasObject.userData?.id)
           setNearbyCanvas(canvasObject)
           setInteractionPrompt("Press E to draw on canvas")
           setCanvasInteractionEnabled(true)
         }
       } else if (nearbyCanvas) {
-        console.log("No longer looking at a canvas")
+        addDebugLog("No longer looking at a canvas")
         setNearbyCanvas(null)
         setInteractionPrompt("")
       }
     }
 
-    function setupPeerConnection() {
-      if (peerInitialized) {
-        console.log("Peer already initialized, skipping setup")
-        return
-      }
-
-      console.log("Initializing PeerJS connection")
-
-      // Generate a random color for this player
-      const playerColor = getRandomColor()
-
-      try {
-        // Create a new Peer with a random ID
-        const peer = new Peer({
-          debug: 3, // Increase debug level to see more logs
-          config: {
-            iceServers: [{ urls: "stun:stun.l.google.com:19302" }, { urls: "stun:global.stun.twilio.com:3478" }],
-          },
-        })
-
-        peerRef.current = peer
-        setPeerInitialized(true)
-
-        // On connection established
-        peer.on("open", (id) => {
-          console.log("My peer ID is:", id)
-          setMyId(id)
-
-          // IMPORTANT: Clean up any existing player models before creating new ones
-          if (myPlayerRef.current.model) {
-            scene.remove(myPlayerRef.current.model)
-          }
-          if (myPlayerRef.current.nameSprite) {
-            scene.remove(myPlayerRef.current.nameSprite)
-          }
-
-          // Join the gallery by connecting to a signaling server or known peers
-          joinGallery(id, playerColor)
-
-          // Create a player model for ourselves (so others can see us)
-          // Set y position explicitly to 1.6 to ensure consistent height
-          const playerPos = new THREE.Vector3(playerPosition.x, 1.6, playerPosition.z)
-          const playerModel = new PlayerModel(playerColor, playerPos)
-
-          const nameSprite = new TextSprite(
-            username,
-            new THREE.Vector3(
-              playerPos.x,
-              playerPos.y + 2.2, // Position above player
-              playerPos.z,
-            ),
-          )
-
-          // Store references to our own model and sprite
-          myPlayerRef.current = {
-            model: playerModel,
-            nameSprite: nameSprite,
-          }
-
-          scene.add(playerModel)
-          scene.add(nameSprite)
-
-          // Add ourselves to the players list - REPLACE existing entry if it exists
-          setPlayers((prev) => {
-            // Create a new object without our previous entry (if it exists)
-            const newPlayers = { ...prev }
-
-            // If we already had an entry, remove it
-            if (newPlayers[id]) {
-              delete newPlayers[id]
-            }
-
-            // Add our new entry
-            return {
-              ...newPlayers,
-              [id]: {
-                id,
-                username,
-                position: playerPos,
-                rotation: playerRotationRef.current,
-                color: playerColor,
-                model: playerModel,
-                nameSprite,
-              },
-            }
-          })
-        })
-
-        // Handle incoming connections
-        peer.on("connection", (conn) => {
-          console.log("Incoming connection from:", conn.peer)
-
-          // Store the connection
-          connectionsRef.current[conn.peer] = conn
-
-          // Handle data from this peer
-          setupConnectionHandlers(conn)
-
-          // Send our info to the new peer
-          conn.on("open", () => {
-            console.log("Connection opened with peer:", conn.peer)
-
-            // Send our player info
-            conn.send({
-              type: "playerInfo",
-              data: {
-                id: peer.id,
-                username,
-                position: {
-                  x: playerPosition.x,
-                  y: 1.6, // Ensure consistent height
-                  z: playerPosition.z,
-                },
-                rotation: playerRotationRef.current,
-                color: playerColor,
-              },
-            })
-
-            // Send canvas data
-            canvases.forEach((canvas) => {
-              const canvasId = canvas.userData.id
-              const savedData = localStorage.getItem(`canvas-${canvasId}`)
-
-              if (savedData) {
-                conn.send({
-                  type: "canvasData",
-                  data: {
-                    canvasId,
-                    imageData: savedData,
-                  },
-                })
-              }
-            })
-          })
-        })
-
-        // Handle errors
-        peer.on("error", (err) => {
-          console.error("Peer error:", err)
-          // Try to reinitialize after error
-          if (err.type === "peer-unavailable") {
-            console.log("Peer unavailable, continuing...")
-          } else {
-            console.log("Attempting to reconnect...")
-            setTimeout(() => {
-              if (peer) {
-                peer.destroy()
-                setPeerInitialized(false)
-                setupPeerConnection()
-              }
-            }, 3000)
-          }
-        })
-      } catch (error) {
-        console.error("Error setting up PeerJS:", error)
-        setPeerInitialized(false)
-      }
-    }
-
-    function joinGallery(peerId: string, playerColor: string) {
-      // Check if there's a peer ID in the URL to connect to
-      const urlParams = new URLSearchParams(window.location.search)
-      const connectToPeer = urlParams.get("p") || urlParams.get("peer") // Support both formats
-
-      if (connectToPeer && connectToPeer !== peerId) {
-        // Connect to the specified peer
-        const peerIds = connectToPeer.split(",")
-        console.log("Connecting to peers:", peerIds)
-
-        peerIds.forEach((targetPeerId) => {
-          if (targetPeerId && targetPeerId !== peerId) {
-            connectToPeerById(targetPeerId)
-          }
-        })
-
-        // Don't modify the URL if we're connecting to an existing peer
-        console.log("Joining existing gallery with peer:", connectToPeer)
-
-        // Set the share URL to the current URL
-        setShareUrl(window.location.href)
-      } else {
-        // We're creating a new gallery
-        const baseUrl = window.location.origin + window.location.pathname
-        const newUrl = `${baseUrl}?p=${peerId}`
-
-        // Update the URL in the browser
-        try {
-          window.history.replaceState({}, "", newUrl)
-          console.log("Updated URL to:", newUrl)
-        } catch (e) {
-          console.error("Failed to update URL:", e)
-        }
-
-        setShareUrl(newUrl)
-        console.log("Created new gallery with peer ID:", peerId)
-      }
-
-      // Always show share info when we have a peer ID
-      setShowShareInfo(true)
-
-      // Force display the connection info
-      const connectionInfo = document.createElement("div")
-      connectionInfo.style.position = "fixed"
-      connectionInfo.style.top = "10px"
-      connectionInfo.style.left = "10px"
-      connectionInfo.style.backgroundColor = "rgba(0,0,0,0.8)"
-      connectionInfo.style.color = "white"
-      connectionInfo.style.padding = "10px"
-      connectionInfo.style.borderRadius = "5px"
-      connectionInfo.style.zIndex = "1000"
-      connectionInfo.innerHTML = `
-    <p>Share URL: ${window.location.href}</p>
-    <p>Your Peer ID: ${peerId}</p>
-  `
-      document.body.appendChild(connectionInfo)
-
-      setTimeout(() => {
-        document.body.removeChild(connectionInfo)
-      }, 10000)
-    }
-
-    function connectToPeerById(targetPeerId: string) {
-      if (!peerRef.current) return
-
-      console.log("Connecting to peer:", targetPeerId)
-
-      // Connect to the target peer
-      const conn = peerRef.current.connect(targetPeerId, {
-        reliable: true,
-      })
-
-      // Store the connection
-      connectionsRef.current[targetPeerId] = conn
-
-      // Setup handlers for this connection
-      setupConnectionHandlers(conn)
-    }
-
-    function setupConnectionHandlers(conn: Peer.DataConnection) {
-      conn.on("data", (data: any) => {
-        // Handle different message types
-        switch (data.type) {
-          case "playerInfo":
-            console.log("Received player info:", data.data)
-            handlePlayerInfo(data.data)
-            break
-
-          case "playerMove":
-            handlePlayerMove(conn.peer, data.data)
-            break
-
-          case "canvasData":
-            handleCanvasData(data.data)
-            break
-
-          case "updateCanvas":
-            handleCanvasUpdate(data.data)
-            break
-
-          case "playerLeft":
-            handlePlayerLeft(data.data.id)
-            break
-        }
-      })
-
-      conn.on("open", () => {
-        console.log("Connection opened to peer:", conn.peer)
-      })
-
-      conn.on("close", () => {
-        console.log("Connection closed with peer:", conn.peer)
-
-        // Remove the connection
-        delete connectionsRef.current[conn.peer]
-
-        // Remove the player
-        handlePlayerLeft(conn.peer)
-      })
-
-      conn.on("error", (err) => {
-        console.error("Connection error:", err)
-      })
-    }
-
-    // Fix the handlePlayerInfo function to prevent duplicates
-    function handlePlayerInfo(playerData: any) {
-      // Skip if this is our own player info
-      if (playerData.id === myId) {
-        console.log("Ignoring own player info")
-        return
-      }
-
-      console.log("Creating player model for:", playerData.username)
-
-      // IMPORTANT: Remove any existing models for this player first
-      setPlayers((prev) => {
-        if (prev[playerData.id]) {
-          if (prev[playerData.id].model) {
-            scene.remove(prev[playerData.id].model)
-          }
-          if (prev[playerData.id].nameSprite) {
-            scene.remove(prev[playerData.id].nameSprite)
-          }
-        }
-        return prev
-      })
-
-      // Create a new player model
-      const playerModel = new PlayerModel(
-        playerData.color,
-        new THREE.Vector3(playerData.position.x, playerData.position.y, playerData.position.z),
-      )
-
-      const nameSprite = new TextSprite(
-        playerData.username,
-        new THREE.Vector3(
-          playerData.position.x,
-          playerData.position.y + 2.2, // Position above player
-          playerData.position.z,
-        ),
-      )
-
-      scene.add(playerModel)
-      scene.add(nameSprite)
-
-      // Add to players list
-      setPlayers((prev) => {
-        // Create a new object without this player's previous entry
-        const newPlayers = { ...prev }
-
-        // If player already existed, remove old entry
-        if (newPlayers[playerData.id]) {
-          delete newPlayers[playerData.id]
-        }
-
-        // Add the new entry
-        return {
-          ...newPlayers,
-          [playerData.id]: {
-            ...playerData,
-            position: new THREE.Vector3(playerData.position.x, playerData.position.y, playerData.position.z),
-            model: playerModel,
-            nameSprite,
-          },
-        }
-      })
-    }
-
-    function handlePlayerMove(playerId: string, moveData: any) {
-      // Skip if this is our own movement data
-      if (playerId === myId) return
-
-      setPlayers((prev) => {
-        if (!prev[playerId]) return prev
-
-        const updatedPlayer = {
-          ...prev[playerId],
-          position: new THREE.Vector3(moveData.position.x, moveData.position.y, moveData.position.z),
-          rotation: moveData.rotation,
-        }
-
-        // Update model and name sprite positions
-        if (updatedPlayer.model) {
-          updatedPlayer.model.position.copy(updatedPlayer.position)
-          updatedPlayer.model.rotation.y = updatedPlayer.rotation
-        }
-
-        if (updatedPlayer.nameSprite) {
-          updatedPlayer.nameSprite.position.set(
-            updatedPlayer.position.x,
-            updatedPlayer.position.y + 2.2,
-            updatedPlayer.position.z,
-          )
-        }
-
-        return {
-          ...prev,
-          [playerId]: updatedPlayer,
-        }
-      })
-    }
-
-    function handleCanvasData(data: any) {
-      const { canvasId, imageData } = data
-
-      // Find the canvas
-      const canvas = canvases.find((c) => c.userData.id === canvasId)
-      if (!canvas) {
-        console.error("Canvas not found:", canvasId)
-        return
-      }
-
-      // Update the canvas texture
-      const offScreenCanvas = canvas.userData.offScreenCanvas
-      const offCtx = offScreenCanvas.getContext("2d")
-
-      if (offCtx) {
-        try {
-          let imgData = imageData
-
-          // If imageData is a JSON string, parse it
-          if (typeof imageData === "string" && imageData.startsWith("{")) {
-            try {
-              const parsedData = JSON.parse(imageData)
-              imgData = parsedData.imageData
-            } catch (e) {
-              console.error("Failed to parse JSON imageData:", e)
-            }
-          }
-
-          // Create a new image and load the data
-          const img = new Image()
-          img.crossOrigin = "anonymous" // Important for CORS
-
-          // Set up onload handler before setting src
-          img.onload = () => {
-            // Clear the canvas first
-            offCtx.clearRect(0, 0, offScreenCanvas.width, offScreenCanvas.height)
-
-            // Draw the image
-            offCtx.drawImage(img, 0, 0)
-
-            // Update the texture
-            const texture = (canvas.material as THREE.MeshBasicMaterial).map
-            if (texture) {
-              texture.needsUpdate = true
-            }
-
-            // Save to localStorage with timestamp to allow for expiration
-            const canvasData = {
-              imageData: imgData,
-              timestamp: Date.now(),
-            }
-
-            try {
-              localStorage.setItem(`canvas-${canvasId}`, JSON.stringify(canvasData))
-              console.log("Canvas data saved to localStorage:", canvasId)
-            } catch (e) {
-              console.error("Failed to save canvas data to localStorage:", e)
-            }
-          }
-
-          // Handle errors
-          img.onerror = (e) => {
-            console.error("Error loading image:", e)
-          }
-
-          // Set the source to load the image
-          img.src = imgData
-        } catch (e) {
-          console.error("Error handling canvas data:", e)
-        }
-      }
-    }
-
-    function handleCanvasUpdate(data: any) {
-      // Same as handleCanvasData
-      handleCanvasData(data)
-
-      // Forward to other peers
-      Object.values(connectionsRef.current).forEach((conn) => {
-        conn.send({
-          type: "canvasData",
-          data,
-        })
-      })
-    }
-
-    function handlePlayerLeft(playerId: string) {
-      console.log("Player left:", playerId)
-
-      setPlayers((prev) => {
-        if (!prev[playerId]) return prev
-
-        // Remove player model and name sprite from scene
-        if (prev[playerId].model) {
-          scene.remove(prev[playerId].model)
-        }
-
-        if (prev[playerId].nameSprite) {
-          scene.remove(prev[playerId].nameSprite)
-        }
-
-        const newPlayers = { ...prev }
-        delete newPlayers[playerId]
-        return newPlayers
-      })
-    }
-
-    // Helper function to generate random color
-    function getRandomColor() {
-      const letters = "0123456789ABCDEF"
-      let color = "#"
-      for (let i = 0; i < 6; i++) {
-        color += letters[Math.floor(Math.random() * 16)]
-      }
-      return color
-    }
-
     // Expose functions to React component
     window.exitDrawingMode = (drawingCanvas: HTMLCanvasElement) => {
       if (!currentCanvas) {
-        console.error("No current canvas to save to")
+        addDebugLog("No current canvas to save to")
         setDrawingMode(false)
         setTimeout(() => {
           controls.lock()
@@ -1199,16 +886,20 @@ export default function Gallery({ username }: GalleryProps) {
         const offCtx = offScreenCanvas.getContext("2d")
 
         if (offCtx) {
+          addDebugLog("Saving drawing to canvas: " + canvasId)
+
           // Clear the canvas first to avoid ghosting
           offCtx.clearRect(0, 0, offScreenCanvas.width, offScreenCanvas.height)
 
           // Copy drawing to the texture
           offCtx.drawImage(drawingCanvas, 0, 0, offScreenCanvas.width, offScreenCanvas.height)
+          addDebugLog("Drawing copied to canvas")
 
           // Update the texture
           const texture = (currentCanvas.material as THREE.MeshBasicMaterial).map
           if (texture) {
             texture.needsUpdate = true
+            addDebugLog("Texture updated")
           }
 
           // Save to localStorage with timestamp
@@ -1221,31 +912,26 @@ export default function Gallery({ username }: GalleryProps) {
           // Save to localStorage
           try {
             localStorage.setItem(`canvas-${canvasId}`, JSON.stringify(canvasData))
-            console.log("Canvas saved to localStorage:", canvasId)
+            addDebugLog("Canvas saved to localStorage: " + canvasId)
+
+            // Dispatch custom event for canvas update
+            const event = new CustomEvent("canvasUpdated", {
+              detail: {
+                canvasId,
+                imageData,
+              },
+            })
+            window.dispatchEvent(event)
           } catch (e) {
             console.error("Failed to save to localStorage:", e)
+            addDebugLog("Failed to save to localStorage: " + e)
           }
-
-          // Broadcast to other peers
-          Object.values(connectionsRef.current).forEach((conn) => {
-            try {
-              conn.send({
-                type: "updateCanvas",
-                data: {
-                  canvasId,
-                  imageData,
-                },
-              })
-              console.log("Canvas data sent to peer:", conn.peer)
-            } catch (e) {
-              console.error("Failed to send canvas data to peer:", e)
-            }
-          })
         }
 
         // Reset state
         setDrawingMode(false)
         setCurrentCanvas(null)
+        addDebugLog("Drawing mode exited")
 
         // Temporarily disable canvas interaction to prevent immediate re-entry
         setCanvasInteractionEnabled(false)
@@ -1259,6 +945,8 @@ export default function Gallery({ username }: GalleryProps) {
         }, 100)
       } catch (error) {
         console.error("Error in exitDrawingMode:", error)
+        addDebugLog("Error in exitDrawingMode: " + error)
+
         // Force exit drawing mode
         setDrawingMode(false)
         setCurrentCanvas(null)
@@ -1281,19 +969,15 @@ export default function Gallery({ username }: GalleryProps) {
         containerRef.current.removeChild(renderer.domElement)
       }
 
-      if (peerRef.current) {
-        peerRef.current.destroy()
-      }
-
       renderer.dispose()
     }
-  }, [username, myId, peerInitialized])
+  }, [username])
 
   // Add a direct event listener for the E key at the component level
   useEffect(() => {
     const handleKeyE = (e: KeyboardEvent) => {
       if (e.code === "KeyE" && !drawingMode && nearbyCanvas && started && canvasInteractionEnabled) {
-        console.log("E key pressed at component level")
+        addDebugLog("E key pressed at component level")
         e.preventDefault()
         enterDrawingMode(nearbyCanvas)
       }
@@ -1307,7 +991,7 @@ export default function Gallery({ username }: GalleryProps) {
   useEffect(() => {
     const handleClick = () => {
       if (nearbyCanvas && !drawingMode && started && canvasInteractionEnabled) {
-        console.log("Canvas clicked, entering drawing mode")
+        addDebugLog("Canvas clicked, entering drawing mode")
         enterDrawingMode(nearbyCanvas)
       }
     }
@@ -1320,6 +1004,7 @@ export default function Gallery({ username }: GalleryProps) {
   useEffect(() => {
     const handleEsc = (e: KeyboardEvent) => {
       if (e.key === "Escape" && drawingMode) {
+        addDebugLog("ESC key pressed, exiting drawing mode")
         if (window.exitDrawingMode && document.querySelector("canvas")) {
           const canvas = document.querySelector("canvas") as HTMLCanvasElement
           window.exitDrawingMode(canvas)
@@ -1335,49 +1020,21 @@ export default function Gallery({ username }: GalleryProps) {
     return () => window.removeEventListener("keydown", handleEsc)
   }, [drawingMode])
 
-  // Always show share info when myId is available
+  // Toggle debug mode with the "D" key
   useEffect(() => {
-    if (myId) {
-      setShowShareInfo(true)
+    const handleKeyPress = (e: KeyboardEvent) => {
+      if (e.code === "KeyD" && e.altKey) {
+        setDebugMode((prev) => !prev)
+      }
     }
-  }, [myId])
 
-  const connectionInfoText =
-    myId && showShareInfo ? (
-      <div
-        className="fixed top-4 left-4 z-50 rounded bg-black/90 p-4 text-white shadow-lg border-2 border-green-500"
-        style={{ maxWidth: "90%" }}
-      >
-        <div className="flex justify-between items-center mb-2">
-          <h3 className="text-xl font-bold">Multiplayer Link</h3>
-          <button onClick={() => setShowShareInfo(false)} className="text-white hover:text-gray-300">
-            ✕
-          </button>
-        </div>
-        <p className="mb-2">Share this URL for others to join:</p>
-        <div className="bg-gray-800 p-2 rounded mb-2 flex items-center">
-          <p className="text-sm select-all cursor-pointer overflow-auto" style={{ wordBreak: "break-all" }}>
-            {window.location.href}
-          </p>
-          <button
-            onClick={() => {
-              navigator.clipboard.writeText(window.location.href)
-              alert("URL copied to clipboard!")
-            }}
-            className="ml-2 bg-green-600 px-2 py-1 rounded text-sm hover:bg-green-700 whitespace-nowrap"
-          >
-            Copy
-          </button>
-        </div>
-        <p className="text-xs mt-2">Your Peer ID: {myId}</p>
-        <p className="text-xs">Connected players: {Object.keys(players).length}</p>
-        <p className="text-xs mt-2 text-yellow-300">Press I to toggle this panel</p>
-      </div>
-    ) : null
+    window.addEventListener("keydown", handleKeyPress)
+    return () => window.removeEventListener("keydown", handleKeyPress)
+  }, [])
 
   // Debug overlay
   const debugOverlay = debugMode ? (
-    <div className="absolute top-4 right-4 z-10 bg-black/80 p-3 text-white text-xs max-w-xs overflow-auto max-h-96">
+    <div className="fixed top-4 right-4 z-10 bg-black/80 p-3 text-white text-xs max-w-xs overflow-auto max-h-96">
       <h3 className="font-bold mb-1">Debug Info:</h3>
       <p>Near Canvas: {nearbyCanvas ? nearbyCanvas.userData?.id : "none"}</p>
       <p>Drawing Mode: {drawingMode ? "true" : "false"}</p>
@@ -1392,79 +1049,21 @@ export default function Gallery({ username }: GalleryProps) {
         })}
       </p>
       <p>My ID: {myId}</p>
-      <p>Share URL: {shareUrl}</p>
       <p>Players Connected: {Object.keys(players).length}</p>
       <p>Player List: {Object.keys(players).join(", ")}</p>
+      <div className="mt-2 border-t border-gray-600 pt-2">
+        <h4 className="font-bold">Log:</h4>
+        <div className="max-h-40 overflow-y-auto">
+          {debugLog.map((log, i) => (
+            <div key={i} className="text-xs text-gray-300">
+              {log}
+            </div>
+          ))}
+        </div>
+      </div>
       <p className="mt-2 text-gray-400">Press Alt+D to toggle debug</p>
     </div>
   ) : null
-
-  // Toggle debug mode with the "D" key
-  useEffect(() => {
-    const handleKeyPress = (e: KeyboardEvent) => {
-      if (e.code === "KeyD" && e.altKey) {
-        setDebugMode((prev) => !prev)
-      }
-      if (e.code === "KeyI") {
-        setShowShareInfo((prev) => !prev)
-      }
-    }
-
-    window.addEventListener("keydown", handleKeyPress)
-    return () => window.removeEventListener("keydown", handleKeyPress)
-  }, [])
-
-  // Floating info button to show share info
-  const infoButton =
-    !showShareInfo && myId ? (
-      <button
-        onClick={() => setShowShareInfo(true)}
-        className="absolute top-4 left-4 z-10 bg-green-600 p-2 rounded-full text-white shadow-lg hover:bg-green-700 animate-pulse"
-        title="Show multiplayer link"
-      >
-        i
-      </button>
-    ) : null
-
-  // Force display the peer ID and URL in the console and as an alert
-  useEffect(() => {
-    if (myId) {
-      console.log("%c YOUR PEER ID: " + myId, "background: #222; color: #bada55; font-size: 20px")
-      console.log("%c SHARE URL: " + window.location.href, "background: #222; color: #bada55; font-size: 20px")
-
-      // Create a fixed position element to show the share URL
-      const urlDisplay = document.createElement("div")
-      urlDisplay.style.position = "fixed"
-      urlDisplay.style.top = "10px"
-      urlDisplay.style.left = "10px"
-      urlDisplay.style.backgroundColor = "rgba(0,0,0,0.8)"
-      urlDisplay.style.color = "white"
-      urlDisplay.style.padding = "10px"
-      urlDisplay.style.borderRadius = "5px"
-      urlDisplay.style.zIndex = "9999"
-      urlDisplay.style.maxWidth = "80%"
-      urlDisplay.style.wordBreak = "break-all"
-      urlDisplay.innerHTML = `
-        <h3>Multiplayer Link (Copy This)</h3>
-        <p style="margin: 5px 0;">${window.location.href}</p>
-        <button id="copy-url-btn" style="background: #4CAF50; border: none; color: white; padding: 5px 10px; cursor: pointer; margin-top: 5px;">Copy URL</button>
-      `
-      document.body.appendChild(urlDisplay)
-
-      // Add click event to copy button
-      document.getElementById("copy-url-btn")?.addEventListener("click", () => {
-        navigator.clipboard.writeText(window.location.href)
-        alert("URL copied to clipboard!")
-      })
-
-      // Remove after 15 seconds
-      setTimeout(() => {
-        if (document.body.contains(urlDisplay)) {
-          document.body.removeChild(urlDisplay)
-        }
-      }, 15000)
-    }
-  }, [myId])
 
   return (
     <div ref={containerRef} className="h-screen w-screen">
@@ -1474,8 +1073,14 @@ export default function Gallery({ username }: GalleryProps) {
 
       {drawingMode && currentCanvas && <DrawingInterface />}
 
-      {connectionInfoText}
-      {infoButton}
+      <PeerConnectionManager
+        username={username}
+        onPeerConnected={handlePeerConnected}
+        onPlayerJoined={handlePlayerJoined}
+        onPlayerMoved={handlePlayerMoved}
+        onPlayerLeft={handlePlayerLeft}
+        onCanvasUpdated={handleCanvasUpdated}
+      />
 
       {debugOverlay}
     </div>

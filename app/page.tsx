@@ -6,6 +6,7 @@ import { LoadingScreen } from "@/components/loading-screen"
 import { LoginScreen } from "@/components/login-screen"
 import { ForceUrlDisplay } from "@/components/force-url-display"
 import { EventSystem } from "@/components/event-system"
+import { MultiplayerDebug } from "@/components/multiplayer-debug"
 
 // Import the Gallery component dynamically with SSR disabled
 // This is necessary because Three.js requires the browser environment
@@ -31,6 +32,7 @@ export default function Home() {
     <main className="h-screen w-screen overflow-hidden">
       <ForceUrlDisplay />
       <EventSystem />
+      <MultiplayerDebug />
       <Suspense fallback={<LoadingScreen />}>
         <Gallery username={username} />
       </Suspense>

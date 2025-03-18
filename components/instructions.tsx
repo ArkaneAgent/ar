@@ -21,6 +21,9 @@ export function Instructions({ onClick }: InstructionsProps) {
       <p className="mb-1">
         <span className="font-bold">ESC</span> - Exit drawing mode
       </p>
+      <p className="mb-1">
+        <span className="font-bold">I</span> - Toggle multiplayer link panel
+      </p>
       <button
         onClick={onClick}
         className="mt-4 rounded bg-green-500 px-4 py-2 text-white font-bold hover:bg-green-600 animate-pulse"
@@ -30,7 +33,8 @@ export function Instructions({ onClick }: InstructionsProps) {
 
       <div className="mt-4 border-t border-white/30 pt-2">
         <p className="text-yellow-300 font-bold">Multiplayer Tips:</p>
-        <p className="text-xs mt-1">• Share the URL to invite others</p>
+        <p className="text-xs mt-1">• Press I to see your share link</p>
+        <p className="text-xs">• Copy and share the URL to invite others</p>
         <p className="text-xs">• Each browser window creates a separate player</p>
         <p className="text-xs">• Drawings are shared with all players</p>
       </div>

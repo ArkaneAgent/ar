@@ -14,6 +14,7 @@ export function DrawingInterface() {
   const [color, setColor] = useState("#000000")
   const [brushSize, setBrushSize] = useState(10)
   const lastPosRef = useRef<{ x: number; y: number } | null>(null)
+  const [saveAttempted, setSaveAttempted] = useState(false)
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -138,7 +139,21 @@ export function DrawingInterface() {
 
   const saveAndClose = () => {
     if (canvasRef.current && window.exitDrawingMode) {
-      window.exitDrawingMode(canvasRef.current)
+      setSaveAttempted(true)
+      try {
+        window.exitDrawingMode(canvasRef.current)
+        console.log("Drawing saved and exited successfully")
+      } catch (error) {
+        console.error("Error saving drawing:", error)
+        // Force exit drawing mode after 500ms if exitDrawingMode fails
+        setTimeout(() => {
+          window.location.reload()
+        }, 500)
+      }
+    } else {
+      console.error("Cannot save drawing - missing canvas or exitDrawingMode function")
+      // Force reload as a last resort
+      window.location.reload()
     }
   }
 
@@ -158,10 +173,21 @@ export function DrawingInterface() {
     "#808080", // Gray
   ]
 
+  // Emergency exit button that forces a page reload
+  const forceExit = () => {
+    window.location.reload()
+  }
+
   return (
-    <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/80">
+    <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-black/80">
       <div className="relative">
-        <canvas ref={canvasRef} width={1024} height={768} className="border-4 border-gray-800 bg-white shadow-2xl" />
+        <canvas
+          ref={canvasRef}
+          width={1024}
+          height={768}
+          className="border-4 border-gray-800 bg-white shadow-2xl cursor-crosshair"
+          style={{ touchAction: "none" }}
+        />
         <div className="absolute -top-10 left-0 right-0 text-center">
           <h2 className="text-2xl font-bold text-white bg-black/50 py-2 rounded-t-lg">Drawing Mode</h2>
         </div>
@@ -216,14 +242,20 @@ export function DrawingInterface() {
 
         <button
           onClick={saveAndClose}
-          className="rounded bg-green-600 px-6 py-3 text-lg font-bold text-white hover:bg-green-700 animate-pulse"
+          className={`rounded bg-green-600 px-6 py-3 text-lg font-bold text-white hover:bg-green-700 ${saveAttempted ? "" : "animate-pulse"}`}
+          disabled={saveAttempted}
         >
-          SAVE & CLOSE
+          {saveAttempted ? "SAVING..." : "SAVE & CLOSE"}
         </button>
       </div>
 
       <div className="mt-3 text-center text-white">
         <p className="text-lg font-bold">Press ESC or click SAVE & CLOSE to save and exit</p>
+        {saveAttempted && (
+          <button onClick={forceExit} className="mt-4 bg-red-600 px-4 py-2 rounded text-white font-bold animate-pulse">
+            EMERGENCY EXIT (Reload Page)
+          </button>
+        )}
       </div>
     </div>
   )

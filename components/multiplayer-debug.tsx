@@ -8,6 +8,7 @@ export function MultiplayerDebug() {
   const [connections, setConnections] = useState<string[]>([])
   const [players, setPlayers] = useState<any[]>([])
   const [debugLog, setDebugLog] = useState<string[]>([])
+  const [urlParams, setUrlParams] = useState<string>("")
 
   useEffect(() => {
     // Update debug info every second
@@ -26,6 +27,9 @@ export function MultiplayerDebug() {
       const windowPlayers = (window as any).players || {}
       setPlayers(Object.values(windowPlayers))
 
+      // Get URL params
+      setUrlParams(window.location.search)
+
       // Add to log if something changed
       const newLog = `Peers: ${Object.keys(peerConnections).length}, Players: ${Object.values(windowPlayers).length}`
       setDebugLog((prev) => {
@@ -38,6 +42,30 @@ export function MultiplayerDebug() {
 
     return () => clearInterval(interval)
   }, [])
+
+  const handleFixUrl = () => {
+    // Extract the peer ID from the URL
+    const urlParams = new URLSearchParams(window.location.search)
+    const peerId = urlParams.get("p") || urlParams.get("peer")
+
+    if (peerId) {
+      // Create a clean URL with just the peer parameter
+      const baseUrl = window.location.origin + window.location.pathname
+      const newUrl = `${baseUrl}?p=${peerId}`
+
+      // Update the URL and reload
+      window.location.href = newUrl
+    } else {
+      // No peer ID, just reload to generate a new one
+      window.location.reload()
+    }
+  }
+
+  const handleClearAndRestart = () => {
+    // Clear the URL and reload
+    const baseUrl = window.location.origin + window.location.pathname
+    window.location.href = baseUrl
+  }
 
   if (!isOpen) {
     return (
@@ -60,8 +88,13 @@ export function MultiplayerDebug() {
       </div>
 
       <div className="mb-4">
+        <h3 className="font-bold mb-1">URL Parameters:</h3>
+        <div className="bg-gray-800 p-2 rounded text-sm break-all">{urlParams || "None"}</div>
+      </div>
+
+      <div className="mb-4">
         <h3 className="font-bold mb-1">My Peer ID:</h3>
-        <div className="bg-gray-800 p-2 rounded text-sm">{myPeerId}</div>
+        <div className="bg-gray-800 p-2 rounded text-sm break-all">{myPeerId}</div>
       </div>
 
       <div className="mb-4">
@@ -69,7 +102,9 @@ export function MultiplayerDebug() {
         {connections.length > 0 ? (
           <ul className="bg-gray-800 p-2 rounded text-sm">
             {connections.map((conn) => (
-              <li key={conn}>{conn}</li>
+              <li key={conn} className="break-all">
+                {conn}
+              </li>
             ))}
           </ul>
         ) : (
@@ -83,7 +118,7 @@ export function MultiplayerDebug() {
           <ul className="bg-gray-800 p-2 rounded text-sm">
             {players.map((player, index) => (
               <li key={index} className="mb-1">
-                {player.username} ({player.id.substring(0, 8)}...)
+                {player.username} ({player.id?.substring(0, 8)}...)
                 <div className="text-xs text-gray-400">
                   Position:{" "}
                   {JSON.stringify({
@@ -110,17 +145,14 @@ export function MultiplayerDebug() {
       </div>
 
       <div className="mt-4 flex gap-2">
+        <button onClick={handleFixUrl} className="bg-green-600 text-white px-3 py-1 rounded text-sm">
+          Fix URL & Reload
+        </button>
+        <button onClick={handleClearAndRestart} className="bg-yellow-600 text-white px-3 py-1 rounded text-sm">
+          Clear URL & Restart
+        </button>
         <button onClick={() => window.location.reload()} className="bg-red-600 text-white px-3 py-1 rounded text-sm">
           Reload Page
-        </button>
-        <button
-          onClick={() => {
-            const url = window.location.origin + window.location.pathname
-            window.location.href = url
-          }}
-          className="bg-yellow-600 text-white px-3 py-1 rounded text-sm"
-        >
-          Clear URL & Restart
         </button>
       </div>
     </div>

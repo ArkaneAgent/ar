@@ -11,7 +11,7 @@ export class TextSprite extends THREE.Sprite {
     canvas.height = 64
 
     if (context) {
-      context.fillStyle = "rgba(0, 0, 0, 0.5)"
+      context.fillStyle = "rgba(0, 0, 0, 0.7)" // More opaque background
       context.fillRect(0, 0, canvas.width, canvas.height)
 
       context.font = "bold 24px Arial"
@@ -35,7 +35,7 @@ export class TextSprite extends THREE.Sprite {
 
     this.scale.set(2, 0.5, 1)
     this.position.copy(position)
-    this.position.y += 1.2 // Significantly raise the text above the player's head
+    this.position.y += 1.5 // Significantly raise the text above the player's head
   }
 }
 

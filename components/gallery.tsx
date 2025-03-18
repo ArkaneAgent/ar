@@ -626,6 +626,7 @@ export default function Gallery({ username }: GalleryProps) {
     }
 
     function checkCanvasInteraction() {
+      // Cast a ray from the camera center
       raycaster.setFromCamera(new THREE.Vector2(0, 0), camera)
 
       const intersects = raycaster.intersectObjects(canvases)
@@ -636,7 +637,7 @@ export default function Gallery({ username }: GalleryProps) {
         setInteractionPrompt("Press E to draw on canvas")
 
         // Debug info
-        console.log("Looking at canvas:", canvasObject.userData.id, "Distance:", intersects[0].distance)
+        console.log("Looking at canvas:", canvasObject.userData?.id, "Distance:", intersects[0].distance)
       } else {
         setNearbyCanvas(null)
         setInteractionPrompt("")
@@ -672,17 +673,16 @@ export default function Gallery({ username }: GalleryProps) {
         joinGallery(id, playerColor)
 
         // Create a player model for ourselves (so others can see us)
-        const playerModel = new PlayerModel(
-          playerColor,
-          new THREE.Vector3(playerPosition.x, playerPosition.y, playerPosition.z),
-        )
+        // Set y position explicitly to 1.6 to ensure consistent height
+        const playerPos = new THREE.Vector3(playerPosition.x, 1.6, playerPosition.z)
+        const playerModel = new PlayerModel(playerColor, playerPos)
 
         const nameSprite = new TextSprite(
           username,
           new THREE.Vector3(
-            playerPosition.x,
-            playerPosition.y + 2.2, // Position above player
-            playerPosition.z,
+            playerPos.x,
+            playerPos.y + 2.2, // Position above player
+            playerPos.z,
           ),
         )
 
@@ -695,7 +695,7 @@ export default function Gallery({ username }: GalleryProps) {
           [id]: {
             id,
             username,
-            position: new THREE.Vector3(playerPosition.x, playerPosition.y, playerPosition.z),
+            position: playerPos,
             rotation: playerRotationRef.current,
             color: playerColor,
             model: playerModel,
@@ -724,7 +724,7 @@ export default function Gallery({ username }: GalleryProps) {
               username,
               position: {
                 x: playerPosition.x,
-                y: playerPosition.y,
+                y: 1.6, // Ensure consistent height
                 z: playerPosition.z,
               },
               rotation: playerRotationRef.current,
@@ -1047,6 +1047,15 @@ export default function Gallery({ username }: GalleryProps) {
     }
   }, [username])
 
+  const connectionInfoText = myId ? (
+    <div className="absolute bottom-4 left-4 z-10 rounded bg-black/70 p-2 text-white">
+      <p>Share this URL for others to join:</p>
+      <p className="text-xs">{window.location.href}</p>
+      <p className="mt-2 text-xs">You can open this URL in multiple browsers to test multiplayer.</p>
+      <p className="text-xs">Each browser creates a separate player with its own connection.</p>
+    </div>
+  ) : null
+
   return (
     <div ref={containerRef} className="h-screen w-screen">
       {!started && !drawingMode && <Instructions onClick={() => {}} />}
@@ -1055,12 +1064,7 @@ export default function Gallery({ username }: GalleryProps) {
 
       {drawingMode && currentCanvas && <DrawingInterface />}
 
-      {myId && (
-        <div className="absolute bottom-4 left-4 z-10 rounded bg-black/70 p-2 text-white">
-          <p>Share this URL for others to join:</p>
-          <p className="text-xs">{window.location.href}</p>
-        </div>
-      )}
+      {connectionInfoText}
     </div>
   )
 }

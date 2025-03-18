@@ -15,13 +15,27 @@ export function DrawingInterface() {
   const [brushSize, setBrushSize] = useState(10)
   const lastPosRef = useRef<{ x: number; y: number } | null>(null)
   const [saveAttempted, setSaveAttempted] = useState(false)
+  const [debugInfo, setDebugInfo] = useState<string[]>([])
+
+  // Add debug info
+  const addDebug = (message: string) => {
+    setDebugInfo((prev) => [...prev.slice(-9), message])
+  }
 
   useEffect(() => {
     const canvas = canvasRef.current
-    if (!canvas) return
+    if (!canvas) {
+      addDebug("Canvas ref not found")
+      return
+    }
 
     const ctx = canvas.getContext("2d")
-    if (!ctx) return
+    if (!ctx) {
+      addDebug("Canvas context not found")
+      return
+    }
+
+    addDebug("Canvas initialized")
 
     // Fill with white background
     ctx.fillStyle = "white"
@@ -54,126 +68,75 @@ export function DrawingInterface() {
 
     // Setup event listeners
     const handleMouseDown = (e: MouseEvent) => {
-      e.preventDefault() // Prevent default behavior
-      setDrawing(true)
-      const rect = canvas.getBoundingClientRect()
-      lastPosRef.current = {
-        x: e.clientX - rect.left,
-        y: e.clientY - rect.top,
-      }
+      e.preventDefault()
+      e.stopPropagation()
 
-      // Draw a single dot at the starting position
-      if (ctx) {
-        ctx.beginPath()
-        ctx.arc(lastPosRef.current.x, lastPosRef.current.y, brushSize / 2, 0, Math.PI * 2)
-        ctx.fillStyle = color
-        ctx.fill()
-      }
+      addDebug(`Mouse down at ${e.clientX}, ${e.clientY}`)
+      setDrawing(true)
+
+      const rect = canvas.getBoundingClientRect()
+      const x = e.clientX - rect.left
+      const y = e.clientY - rect.top
+
+      lastPosRef.current = { x, y }
+
+      // Draw a dot at the starting position
+      ctx.beginPath()
+      ctx.arc(x, y, brushSize / 2, 0, Math.PI * 2)
+      ctx.fillStyle = color
+      ctx.fill()
     }
 
     const handleMouseMove = (e: MouseEvent) => {
-      e.preventDefault() // Prevent default behavior
+      e.preventDefault()
+      e.stopPropagation()
+
       if (!drawing || !lastPosRef.current) return
 
       const rect = canvas.getBoundingClientRect()
       const x = e.clientX - rect.left
       const y = e.clientY - rect.top
 
-      ctx.lineWidth = brushSize
-      ctx.lineCap = "round"
-      ctx.lineJoin = "round"
-      ctx.strokeStyle = color
-
       ctx.beginPath()
       ctx.moveTo(lastPosRef.current.x, lastPosRef.current.y)
       ctx.lineTo(x, y)
+      ctx.strokeStyle = color
+      ctx.lineWidth = brushSize
+      ctx.lineCap = "round"
+      ctx.lineJoin = "round"
       ctx.stroke()
 
       lastPosRef.current = { x, y }
     }
 
     const handleMouseUp = (e: MouseEvent) => {
-      e.preventDefault() // Prevent default behavior
+      e.preventDefault()
+      e.stopPropagation()
+
+      addDebug("Mouse up - drawing stopped")
       setDrawing(false)
       lastPosRef.current = null
     }
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        addDebug("ESC pressed - saving and closing")
         saveAndClose()
       }
     }
 
-    // Add touch support
-    const handleTouchStart = (e: TouchEvent) => {
-      e.preventDefault() // Prevent default behavior
-      if (e.touches.length > 0) {
-        setDrawing(true)
-        const rect = canvas.getBoundingClientRect()
-        lastPosRef.current = {
-          x: e.touches[0].clientX - rect.left,
-          y: e.touches[0].clientY - rect.top,
-        }
-
-        // Draw a single dot at the starting position
-        if (ctx) {
-          ctx.beginPath()
-          ctx.arc(lastPosRef.current.x, lastPosRef.current.y, brushSize / 2, 0, Math.PI * 2)
-          ctx.fillStyle = color
-          ctx.fill()
-        }
-      }
-    }
-
-    const handleTouchMove = (e: TouchEvent) => {
-      e.preventDefault() // Prevent default behavior
-      if (!drawing || !lastPosRef.current || e.touches.length === 0) return
-
-      const rect = canvas.getBoundingClientRect()
-      const x = e.touches[0].clientX - rect.left
-      const y = e.touches[0].clientY - rect.top
-
-      ctx.lineWidth = brushSize
-      ctx.lineCap = "round"
-      ctx.lineJoin = "round"
-      ctx.strokeStyle = color
-
-      ctx.beginPath()
-      ctx.moveTo(lastPosRef.current.x, lastPosRef.current.y)
-      ctx.lineTo(x, y)
-      ctx.stroke()
-
-      lastPosRef.current = { x, y }
-    }
-
-    const handleTouchEnd = (e: TouchEvent) => {
-      e.preventDefault() // Prevent default behavior
-      setDrawing(false)
-      lastPosRef.current = null
-    }
-
-    canvas.addEventListener("mousedown", handleMouseDown, { passive: false })
-    canvas.addEventListener("mousemove", handleMouseMove, { passive: false })
-    canvas.addEventListener("mouseup", handleMouseUp, { passive: false })
-    canvas.addEventListener("mouseout", handleMouseUp, { passive: false })
-
-    // Add touch events
-    canvas.addEventListener("touchstart", handleTouchStart, { passive: false })
-    canvas.addEventListener("touchmove", handleTouchMove, { passive: false })
-    canvas.addEventListener("touchend", handleTouchEnd, { passive: false })
-
+    // Add the event listeners
+    canvas.addEventListener("mousedown", handleMouseDown)
+    canvas.addEventListener("mousemove", handleMouseMove)
+    canvas.addEventListener("mouseup", handleMouseUp)
+    canvas.addEventListener("mouseleave", handleMouseUp)
     document.addEventListener("keydown", handleKeyDown)
 
     return () => {
       canvas.removeEventListener("mousedown", handleMouseDown)
       canvas.removeEventListener("mousemove", handleMouseMove)
       canvas.removeEventListener("mouseup", handleMouseUp)
-      canvas.removeEventListener("mouseout", handleMouseUp)
-
-      canvas.removeEventListener("touchstart", handleTouchStart)
-      canvas.removeEventListener("touchmove", handleTouchMove)
-      canvas.removeEventListener("touchend", handleTouchEnd)
-
+      canvas.removeEventListener("mouseleave", handleMouseUp)
       document.removeEventListener("keydown", handleKeyDown)
     }
   }, [drawing, color, brushSize])
@@ -208,35 +171,60 @@ export function DrawingInterface() {
   }
 
   const saveAndClose = () => {
-    if (canvasRef.current && window.exitDrawingMode) {
-      setSaveAttempted(true)
-      try {
-        // Create a copy of the canvas data to ensure it persists
-        const tempCanvas = document.createElement("canvas")
-        tempCanvas.width = canvasRef.current.width
-        tempCanvas.height = canvasRef.current.height
-        const tempCtx = tempCanvas.getContext("2d")
+    if (!canvasRef.current) {
+      addDebug("No canvas to save")
+      return
+    }
 
-        if (tempCtx) {
-          tempCtx.drawImage(canvasRef.current, 0, 0)
+    setSaveAttempted(true)
+    addDebug("Attempting to save canvas")
 
-          // Now pass this temp canvas to exitDrawingMode
-          window.exitDrawingMode(tempCanvas)
-          console.log("Drawing saved and exited successfully")
-        } else {
-          throw new Error("Could not get context from temp canvas")
-        }
-      } catch (error) {
-        console.error("Error saving drawing:", error)
-        // Force exit drawing mode after 500ms if exitDrawingMode fails
-        setTimeout(() => {
-          window.location.reload()
-        }, 500)
+    try {
+      // Create a copy of the canvas data
+      const tempCanvas = document.createElement("canvas")
+      tempCanvas.width = canvasRef.current.width
+      tempCanvas.height = canvasRef.current.height
+
+      const tempCtx = tempCanvas.getContext("2d")
+      if (!tempCtx) {
+        addDebug("Failed to get temp context")
+        throw new Error("Could not get context from temp canvas")
       }
-    } else {
-      console.error("Cannot save drawing - missing canvas or exitDrawingMode function")
-      // Force reload as a last resort
-      window.location.reload()
+
+      // Copy the canvas content
+      tempCtx.drawImage(canvasRef.current, 0, 0)
+
+      // Save the canvas data to local storage directly
+      const canvasId = "manual-save-" + Date.now()
+      const imageData = tempCanvas.toDataURL("image/png")
+
+      localStorage.setItem(
+        canvasId,
+        JSON.stringify({
+          imageData,
+          timestamp: Date.now(),
+        }),
+      )
+
+      addDebug("Canvas saved to localStorage")
+
+      // Call the exit function if it exists
+      if (window.exitDrawingMode) {
+        window.exitDrawingMode(tempCanvas)
+        addDebug("exitDrawingMode called successfully")
+      } else {
+        addDebug("exitDrawingMode not found")
+        // Force reload as a last resort
+        window.location.reload()
+      }
+    } catch (error) {
+      addDebug(`Error saving: ${error}`)
+      console.error("Error saving drawing:", error)
+
+      // Force exit drawing mode after 500ms if exitDrawingMode fails
+      setTimeout(() => {
+        window.location.reload()
+      }, 500)
     }
   }
 
@@ -262,7 +250,7 @@ export function DrawingInterface() {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/80">
+    <div className="fixed inset-0 z-[9999] flex flex-col items-center justify-center bg-black/90">
       <div className="relative">
         <canvas
           ref={canvasRef}
@@ -346,6 +334,16 @@ export function DrawingInterface() {
             EMERGENCY EXIT (Reload Page)
           </button>
         )}
+      </div>
+
+      {/* Debug info */}
+      <div className="fixed bottom-4 right-4 bg-black/80 p-2 text-white text-xs max-w-xs z-[10000]">
+        <h3 className="font-bold">Debug:</h3>
+        <ul>
+          {debugInfo.map((msg, i) => (
+            <li key={i}>{msg}</li>
+          ))}
+        </ul>
       </div>
     </div>
   )

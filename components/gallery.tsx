@@ -688,139 +688,157 @@ export default function Gallery({ username }: GalleryProps) {
         return
       }
 
+      console.log("Initializing PeerJS connection")
+
       // Generate a random color for this player
       const playerColor = getRandomColor()
 
-      // Create a new Peer with a random ID
-      const peer = new Peer({
-        debug: 1, // Reduce debug level for better performance
-        config: {
-          iceServers: [{ urls: "stun:stun.l.google.com:19302" }, { urls: "stun:global.stun.twilio.com:3478" }],
-        },
-      })
-
-      peerRef.current = peer
-      setPeerInitialized(true)
-
-      // On connection established
-      peer.on("open", (id) => {
-        console.log("My peer ID is:", id)
-        setMyId(id)
-
-        // IMPORTANT: Clean up any existing player models before creating new ones
-        if (myPlayerRef.current.model) {
-          scene.remove(myPlayerRef.current.model)
-        }
-        if (myPlayerRef.current.nameSprite) {
-          scene.remove(myPlayerRef.current.nameSprite)
-        }
-
-        // Join the gallery by connecting to a signaling server or known peers
-        joinGallery(id, playerColor)
-
-        // Create a player model for ourselves (so others can see us)
-        // Set y position explicitly to 1.6 to ensure consistent height
-        const playerPos = new THREE.Vector3(playerPosition.x, 1.6, playerPosition.z)
-        const playerModel = new PlayerModel(playerColor, playerPos)
-
-        const nameSprite = new TextSprite(
-          username,
-          new THREE.Vector3(
-            playerPos.x,
-            playerPos.y + 2.2, // Position above player
-            playerPos.z,
-          ),
-        )
-
-        // Store references to our own model and sprite
-        myPlayerRef.current = {
-          model: playerModel,
-          nameSprite: nameSprite,
-        }
-
-        scene.add(playerModel)
-        scene.add(nameSprite)
-
-        // Add ourselves to the players list - REPLACE existing entry if it exists
-        setPlayers((prev) => {
-          // Create a new object without our previous entry (if it exists)
-          const newPlayers = { ...prev }
-
-          // If we already had an entry, remove it
-          if (newPlayers[id]) {
-            delete newPlayers[id]
-          }
-
-          // Add our new entry
-          return {
-            ...newPlayers,
-            [id]: {
-              id,
-              username,
-              position: playerPos,
-              rotation: playerRotationRef.current,
-              color: playerColor,
-              model: playerModel,
-              nameSprite,
-            },
-          }
+      try {
+        // Create a new Peer with a random ID
+        const peer = new Peer({
+          debug: 3, // Increase debug level to see more logs
+          config: {
+            iceServers: [{ urls: "stun:stun.l.google.com:19302" }, { urls: "stun:global.stun.twilio.com:3478" }],
+          },
         })
-      })
 
-      // Handle incoming connections
-      peer.on("connection", (conn) => {
-        console.log("Incoming connection from:", conn.peer)
+        peerRef.current = peer
+        setPeerInitialized(true)
 
-        // Store the connection
-        connectionsRef.current[conn.peer] = conn
+        // On connection established
+        peer.on("open", (id) => {
+          console.log("My peer ID is:", id)
+          setMyId(id)
 
-        // Handle data from this peer
-        setupConnectionHandlers(conn)
+          // IMPORTANT: Clean up any existing player models before creating new ones
+          if (myPlayerRef.current.model) {
+            scene.remove(myPlayerRef.current.model)
+          }
+          if (myPlayerRef.current.nameSprite) {
+            scene.remove(myPlayerRef.current.nameSprite)
+          }
 
-        // Send our info to the new peer
-        conn.on("open", () => {
-          console.log("Connection opened with peer:", conn.peer)
+          // Join the gallery by connecting to a signaling server or known peers
+          joinGallery(id, playerColor)
 
-          // Send our player info
-          conn.send({
-            type: "playerInfo",
-            data: {
-              id: peer.id,
-              username,
-              position: {
-                x: playerPosition.x,
-                y: 1.6, // Ensure consistent height
-                z: playerPosition.z,
+          // Create a player model for ourselves (so others can see us)
+          // Set y position explicitly to 1.6 to ensure consistent height
+          const playerPos = new THREE.Vector3(playerPosition.x, 1.6, playerPosition.z)
+          const playerModel = new PlayerModel(playerColor, playerPos)
+
+          const nameSprite = new TextSprite(
+            username,
+            new THREE.Vector3(
+              playerPos.x,
+              playerPos.y + 2.2, // Position above player
+              playerPos.z,
+            ),
+          )
+
+          // Store references to our own model and sprite
+          myPlayerRef.current = {
+            model: playerModel,
+            nameSprite: nameSprite,
+          }
+
+          scene.add(playerModel)
+          scene.add(nameSprite)
+
+          // Add ourselves to the players list - REPLACE existing entry if it exists
+          setPlayers((prev) => {
+            // Create a new object without our previous entry (if it exists)
+            const newPlayers = { ...prev }
+
+            // If we already had an entry, remove it
+            if (newPlayers[id]) {
+              delete newPlayers[id]
+            }
+
+            // Add our new entry
+            return {
+              ...newPlayers,
+              [id]: {
+                id,
+                username,
+                position: playerPos,
+                rotation: playerRotationRef.current,
+                color: playerColor,
+                model: playerModel,
+                nameSprite,
               },
-              rotation: playerRotationRef.current,
-              color: playerColor,
-            },
-          })
-
-          // Send canvas data
-          canvases.forEach((canvas) => {
-            const canvasId = canvas.userData.id
-            const savedData = localStorage.getItem(`canvas-${canvasId}`)
-
-            if (savedData) {
-              conn.send({
-                type: "canvasData",
-                data: {
-                  canvasId,
-                  imageData: savedData,
-                },
-              })
             }
           })
         })
-      })
 
-      // Handle errors
-      peer.on("error", (err) => {
-        console.error("Peer error:", err)
-      })
+        // Handle incoming connections
+        peer.on("connection", (conn) => {
+          console.log("Incoming connection from:", conn.peer)
 
-      return peer
+          // Store the connection
+          connectionsRef.current[conn.peer] = conn
+
+          // Handle data from this peer
+          setupConnectionHandlers(conn)
+
+          // Send our info to the new peer
+          conn.on("open", () => {
+            console.log("Connection opened with peer:", conn.peer)
+
+            // Send our player info
+            conn.send({
+              type: "playerInfo",
+              data: {
+                id: peer.id,
+                username,
+                position: {
+                  x: playerPosition.x,
+                  y: 1.6, // Ensure consistent height
+                  z: playerPosition.z,
+                },
+                rotation: playerRotationRef.current,
+                color: playerColor,
+              },
+            })
+
+            // Send canvas data
+            canvases.forEach((canvas) => {
+              const canvasId = canvas.userData.id
+              const savedData = localStorage.getItem(`canvas-${canvasId}`)
+
+              if (savedData) {
+                conn.send({
+                  type: "canvasData",
+                  data: {
+                    canvasId,
+                    imageData: savedData,
+                  },
+                })
+              }
+            })
+          })
+        })
+
+        // Handle errors
+        peer.on("error", (err) => {
+          console.error("Peer error:", err)
+          // Try to reinitialize after error
+          if (err.type === "peer-unavailable") {
+            console.log("Peer unavailable, continuing...")
+          } else {
+            console.log("Attempting to reconnect...")
+            setTimeout(() => {
+              if (peer) {
+                peer.destroy()
+                setPeerInitialized(false)
+                setupPeerConnection()
+              }
+            }, 3000)
+          }
+        })
+      } catch (error) {
+        console.error("Error setting up PeerJS:", error)
+        setPeerInitialized(false)
+      }
     }
 
     function joinGallery(peerId: string, playerColor: string) {
@@ -845,20 +863,44 @@ export default function Gallery({ username }: GalleryProps) {
         // Set the share URL to the current URL
         setShareUrl(window.location.href)
       } else {
-        // Only update the URL if we're creating a new gallery
+        // We're creating a new gallery
         const baseUrl = window.location.origin + window.location.pathname
         const newUrl = `${baseUrl}?p=${peerId}`
-        window.history.replaceState({}, "", newUrl)
+
+        // Update the URL in the browser
+        try {
+          window.history.replaceState({}, "", newUrl)
+          console.log("Updated URL to:", newUrl)
+        } catch (e) {
+          console.error("Failed to update URL:", e)
+        }
+
         setShareUrl(newUrl)
         console.log("Created new gallery with peer ID:", peerId)
       }
 
-      // Display connection info
-      console.log("Share this URL for others to join:", window.location.href)
-      setShareUrl(window.location.href)
-
-      // Show share info by default
+      // Always show share info when we have a peer ID
       setShowShareInfo(true)
+
+      // Force display the connection info
+      const connectionInfo = document.createElement("div")
+      connectionInfo.style.position = "fixed"
+      connectionInfo.style.top = "10px"
+      connectionInfo.style.left = "10px"
+      connectionInfo.style.backgroundColor = "rgba(0,0,0,0.8)"
+      connectionInfo.style.color = "white"
+      connectionInfo.style.padding = "10px"
+      connectionInfo.style.borderRadius = "5px"
+      connectionInfo.style.zIndex = "1000"
+      connectionInfo.innerHTML = `
+    <p>Share URL: ${window.location.href}</p>
+    <p>Your Peer ID: ${peerId}</p>
+  `
+      document.body.appendChild(connectionInfo)
+
+      setTimeout(() => {
+        document.body.removeChild(connectionInfo)
+      }, 10000)
     }
 
     function connectToPeerById(targetPeerId: string) {
@@ -1027,7 +1069,10 @@ export default function Gallery({ username }: GalleryProps) {
 
       // Find the canvas
       const canvas = canvases.find((c) => c.userData.id === canvasId)
-      if (!canvas) return
+      if (!canvas) {
+        console.error("Canvas not found:", canvasId)
+        return
+      }
 
       // Update the canvas texture
       const offScreenCanvas = canvas.userData.offScreenCanvas
@@ -1039,13 +1084,24 @@ export default function Gallery({ username }: GalleryProps) {
 
           // If imageData is a JSON string, parse it
           if (typeof imageData === "string" && imageData.startsWith("{")) {
-            const parsedData = JSON.parse(imageData)
-            imgData = parsedData.imageData
+            try {
+              const parsedData = JSON.parse(imageData)
+              imgData = parsedData.imageData
+            } catch (e) {
+              console.error("Failed to parse JSON imageData:", e)
+            }
           }
 
+          // Create a new image and load the data
           const img = new Image()
-          img.crossOrigin = "anonymous"
+          img.crossOrigin = "anonymous" // Important for CORS
+
+          // Set up onload handler before setting src
           img.onload = () => {
+            // Clear the canvas first
+            offCtx.clearRect(0, 0, offScreenCanvas.width, offScreenCanvas.height)
+
+            // Draw the image
             offCtx.drawImage(img, 0, 0)
 
             // Update the texture
@@ -1059,8 +1115,21 @@ export default function Gallery({ username }: GalleryProps) {
               imageData: imgData,
               timestamp: Date.now(),
             }
-            localStorage.setItem(`canvas-${canvasId}`, JSON.stringify(canvasData))
+
+            try {
+              localStorage.setItem(`canvas-${canvasId}`, JSON.stringify(canvasData))
+              console.log("Canvas data saved to localStorage:", canvasId)
+            } catch (e) {
+              console.error("Failed to save canvas data to localStorage:", e)
+            }
           }
+
+          // Handle errors
+          img.onerror = (e) => {
+            console.error("Error loading image:", e)
+          }
+
+          // Set the source to load the image
           img.src = imgData
         } catch (e) {
           console.error("Error handling canvas data:", e)
@@ -1130,6 +1199,9 @@ export default function Gallery({ username }: GalleryProps) {
         const offCtx = offScreenCanvas.getContext("2d")
 
         if (offCtx) {
+          // Clear the canvas first to avoid ghosting
+          offCtx.clearRect(0, 0, offScreenCanvas.width, offScreenCanvas.height)
+
           // Copy drawing to the texture
           offCtx.drawImage(drawingCanvas, 0, 0, offScreenCanvas.width, offScreenCanvas.height)
 
@@ -1145,17 +1217,29 @@ export default function Gallery({ username }: GalleryProps) {
             imageData,
             timestamp: Date.now(),
           }
-          localStorage.setItem(`canvas-${canvasId}`, JSON.stringify(canvasData))
+
+          // Save to localStorage
+          try {
+            localStorage.setItem(`canvas-${canvasId}`, JSON.stringify(canvasData))
+            console.log("Canvas saved to localStorage:", canvasId)
+          } catch (e) {
+            console.error("Failed to save to localStorage:", e)
+          }
 
           // Broadcast to other peers
           Object.values(connectionsRef.current).forEach((conn) => {
-            conn.send({
-              type: "updateCanvas",
-              data: {
-                canvasId,
-                imageData,
-              },
-            })
+            try {
+              conn.send({
+                type: "updateCanvas",
+                data: {
+                  canvasId,
+                  imageData,
+                },
+              })
+              console.log("Canvas data sent to peer:", conn.peer)
+            } catch (e) {
+              console.error("Failed to send canvas data to peer:", e)
+            }
           })
         }
 
@@ -1260,7 +1344,10 @@ export default function Gallery({ username }: GalleryProps) {
 
   const connectionInfoText =
     myId && showShareInfo ? (
-      <div className="absolute top-4 left-4 z-10 rounded bg-black/90 p-4 text-white shadow-lg border-2 border-green-500">
+      <div
+        className="fixed top-4 left-4 z-50 rounded bg-black/90 p-4 text-white shadow-lg border-2 border-green-500"
+        style={{ maxWidth: "90%" }}
+      >
         <div className="flex justify-between items-center mb-2">
           <h3 className="text-xl font-bold">Multiplayer Link</h3>
           <button onClick={() => setShowShareInfo(false)} className="text-white hover:text-gray-300">
@@ -1269,19 +1356,22 @@ export default function Gallery({ username }: GalleryProps) {
         </div>
         <p className="mb-2">Share this URL for others to join:</p>
         <div className="bg-gray-800 p-2 rounded mb-2 flex items-center">
-          <p className="text-sm select-all cursor-pointer overflow-auto max-w-xs">{shareUrl}</p>
+          <p className="text-sm select-all cursor-pointer overflow-auto" style={{ wordBreak: "break-all" }}>
+            {window.location.href}
+          </p>
           <button
             onClick={() => {
-              navigator.clipboard.writeText(shareUrl)
+              navigator.clipboard.writeText(window.location.href)
               alert("URL copied to clipboard!")
             }}
-            className="ml-2 bg-green-600 px-2 py-1 rounded text-sm hover:bg-green-700"
+            className="ml-2 bg-green-600 px-2 py-1 rounded text-sm hover:bg-green-700 whitespace-nowrap"
           >
             Copy
           </button>
         </div>
-        <p className="text-xs mt-2">Press I to toggle this info panel</p>
+        <p className="text-xs mt-2">Your Peer ID: {myId}</p>
         <p className="text-xs">Connected players: {Object.keys(players).length}</p>
+        <p className="text-xs mt-2 text-yellow-300">Press I to toggle this panel</p>
       </div>
     ) : null
 
@@ -1335,6 +1425,46 @@ export default function Gallery({ username }: GalleryProps) {
         i
       </button>
     ) : null
+
+  // Force display the peer ID and URL in the console and as an alert
+  useEffect(() => {
+    if (myId) {
+      console.log("%c YOUR PEER ID: " + myId, "background: #222; color: #bada55; font-size: 20px")
+      console.log("%c SHARE URL: " + window.location.href, "background: #222; color: #bada55; font-size: 20px")
+
+      // Create a fixed position element to show the share URL
+      const urlDisplay = document.createElement("div")
+      urlDisplay.style.position = "fixed"
+      urlDisplay.style.top = "10px"
+      urlDisplay.style.left = "10px"
+      urlDisplay.style.backgroundColor = "rgba(0,0,0,0.8)"
+      urlDisplay.style.color = "white"
+      urlDisplay.style.padding = "10px"
+      urlDisplay.style.borderRadius = "5px"
+      urlDisplay.style.zIndex = "9999"
+      urlDisplay.style.maxWidth = "80%"
+      urlDisplay.style.wordBreak = "break-all"
+      urlDisplay.innerHTML = `
+        <h3>Multiplayer Link (Copy This)</h3>
+        <p style="margin: 5px 0;">${window.location.href}</p>
+        <button id="copy-url-btn" style="background: #4CAF50; border: none; color: white; padding: 5px 10px; cursor: pointer; margin-top: 5px;">Copy URL</button>
+      `
+      document.body.appendChild(urlDisplay)
+
+      // Add click event to copy button
+      document.getElementById("copy-url-btn")?.addEventListener("click", () => {
+        navigator.clipboard.writeText(window.location.href)
+        alert("URL copied to clipboard!")
+      })
+
+      // Remove after 15 seconds
+      setTimeout(() => {
+        if (document.body.contains(urlDisplay)) {
+          document.body.removeChild(urlDisplay)
+        }
+      }, 15000)
+    }
+  }, [myId])
 
   return (
     <div ref={containerRef} className="h-screen w-screen">

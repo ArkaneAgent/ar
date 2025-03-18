@@ -159,8 +159,14 @@ export function DrawingInterface() {
   ]
 
   return (
-    <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/70">
-      <canvas ref={canvasRef} width={1024} height={768} className="border-2 border-gray-800 bg-white shadow-2xl" />
+    <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/80">
+      <div className="relative">
+        <canvas ref={canvasRef} width={1024} height={768} className="border-4 border-gray-800 bg-white shadow-2xl" />
+        <div className="absolute -top-10 left-0 right-0 text-center">
+          <h2 className="text-2xl font-bold text-white bg-black/50 py-2 rounded-t-lg">Drawing Mode</h2>
+        </div>
+      </div>
+
       <div className="mt-5 flex flex-wrap items-center justify-center gap-5 rounded bg-white/95 p-4 shadow-lg">
         <div className="flex flex-col items-center">
           <label htmlFor="colorPicker" className="mb-2 text-sm font-medium uppercase text-gray-700">
@@ -222,3 +228,4 @@ export function DrawingInterface() {
     </div>
   )
 }
+

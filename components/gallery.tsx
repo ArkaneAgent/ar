@@ -30,6 +30,7 @@ declare global {
   interface Window {
     exitDrawingMode: (canvas: HTMLCanvasElement) => void
     debugLog: (message: string) => void
+    removeAllPlayers: () => void
   }
 }
 
@@ -44,17 +45,16 @@ export default function Gallery({ username }: GalleryProps) {
   const [myId, setMyId] = useState<string>("")
   const playerPositionRef = useRef<THREE.Vector3>(new THREE.Vector3(0, 1.6, 5))
   const playerRotationRef = useRef<number>(0)
-  const myPlayerRef = useRef<{ model: PlayerModel | null; nameSprite: TextSprite | null }>({
-    model: null,
-    nameSprite: null,
-  })
   const [debugMode, setDebugMode] = useState(true)
   const [canvasInteractionEnabled, setCanvasInteractionEnabled] = useState(true)
   const [debugLog, setDebugLog] = useState<string[]>([])
+
+  // Refs
   const sceneRef = useRef<THREE.Scene | null>(null)
   const canvasesRef = useRef<THREE.Mesh[]>([])
   const controlsRef = useRef<PointerLockControls | null>(null)
   const existingPlayersRef = useRef<Set<string>>(new Set())
+  const playerModelsRef = useRef<Record<string, { model: PlayerModel; nameSprite: TextSprite }>>({})
 
   // Add debug log function
   const addDebugLog = (message: string) => {
@@ -65,6 +65,26 @@ export default function Gallery({ username }: GalleryProps) {
   // Expose debug log function globally
   useEffect(() => {
     window.debugLog = addDebugLog
+
+    // Add a function to remove all players (for debugging)
+    window.removeAllPlayers = () => {
+      addDebugLog("Removing all players")
+
+      // Remove all player models from the scene
+      Object.values(playerModelsRef.current).forEach(({ model, nameSprite }) => {
+        if (sceneRef.current) {
+          sceneRef.current.remove(model)
+          sceneRef.current.remove(nameSprite)
+        }
+      })
+
+      // Clear the players state and refs
+      setPlayers({})
+      playerModelsRef.current = {}
+      existingPlayersRef.current.clear()
+
+      addDebugLog("All players removed")
+    }
   }, [])
 
   // Function to handle entering drawing mode - defined at component level
@@ -85,7 +105,7 @@ export default function Gallery({ username }: GalleryProps) {
 
     // Check if this player already exists to prevent duplication
     if (existingPlayersRef.current.has(playerId)) {
-      addDebugLog(`Player ${playerId} already exists, updating instead of creating new`)
+      addDebugLog(`Player ${playerId} already exists, updating position only`)
 
       // Update the player's position if they already exist
       setPlayers((prev) => {
@@ -95,16 +115,11 @@ export default function Gallery({ username }: GalleryProps) {
             position: new THREE.Vector3(position.x, position.y, position.z),
           }
 
-          if (updatedPlayer.model) {
-            updatedPlayer.model.position.copy(updatedPlayer.position)
-          }
-
-          if (updatedPlayer.nameSprite) {
-            updatedPlayer.nameSprite.position.set(
-              updatedPlayer.position.x,
-              updatedPlayer.position.y + 2.2,
-              updatedPlayer.position.z,
-            )
+          // Update the model position if it exists
+          if (playerModelsRef.current[playerId]) {
+            const { model, nameSprite } = playerModelsRef.current[playerId]
+            model.position.copy(updatedPlayer.position)
+            nameSprite.position.set(updatedPlayer.position.x, updatedPlayer.position.y + 2.2, updatedPlayer.position.z)
           }
 
           return {
@@ -134,12 +149,13 @@ export default function Gallery({ username }: GalleryProps) {
       sceneRef.current.add(playerModel)
       sceneRef.current.add(nameSprite)
 
-      // If this is our own player, store a reference
+      // Store the model and sprite
+      playerModelsRef.current[playerId] = {
+        model: playerModel,
+        nameSprite: nameSprite,
+      }
+
       if (playerId === myId) {
-        myPlayerRef.current = {
-          model: playerModel,
-          nameSprite: nameSprite,
-        }
         addDebugLog(`Created my own player model`)
       } else {
         addDebugLog(`Added player model for: ${playerUsername}`)
@@ -154,8 +170,6 @@ export default function Gallery({ username }: GalleryProps) {
           position: playerPos,
           rotation: 0,
           color,
-          model: playerModel,
-          nameSprite,
         },
       }))
     }
@@ -165,6 +179,7 @@ export default function Gallery({ username }: GalleryProps) {
     // Skip if this is our own movement
     if (playerId === myId) return
 
+    // Update the player's position
     setPlayers((prev) => {
       if (!prev[playerId]) return prev
 
@@ -174,18 +189,12 @@ export default function Gallery({ username }: GalleryProps) {
         rotation,
       }
 
-      // Update model and name sprite positions
-      if (updatedPlayer.model) {
-        updatedPlayer.model.position.copy(updatedPlayer.position)
-        updatedPlayer.model.rotation.y = updatedPlayer.rotation
-      }
-
-      if (updatedPlayer.nameSprite) {
-        updatedPlayer.nameSprite.position.set(
-          updatedPlayer.position.x,
-          updatedPlayer.position.y + 2.2,
-          updatedPlayer.position.z,
-        )
+      // Update the model position if it exists
+      if (playerModelsRef.current[playerId]) {
+        const { model, nameSprite } = playerModelsRef.current[playerId]
+        model.position.copy(updatedPlayer.position)
+        model.rotation.y = updatedPlayer.rotation
+        nameSprite.position.set(updatedPlayer.position.x, updatedPlayer.position.y + 2.2, updatedPlayer.position.z)
       }
 
       return {
@@ -201,18 +210,16 @@ export default function Gallery({ username }: GalleryProps) {
     // Remove from existing players set
     existingPlayersRef.current.delete(playerId)
 
+    // Remove player model and name sprite from scene
+    if (playerModelsRef.current[playerId] && sceneRef.current) {
+      const { model, nameSprite } = playerModelsRef.current[playerId]
+      sceneRef.current.remove(model)
+      sceneRef.current.remove(nameSprite)
+      delete playerModelsRef.current[playerId]
+    }
+
+    // Remove from players state
     setPlayers((prev) => {
-      if (!prev[playerId]) return prev
-
-      // Remove player model and name sprite from scene
-      if (prev[playerId].model && sceneRef.current) {
-        sceneRef.current.remove(prev[playerId].model)
-      }
-
-      if (prev[playerId].nameSprite && sceneRef.current) {
-        sceneRef.current.remove(prev[playerId].nameSprite)
-      }
-
       const newPlayers = { ...prev }
       delete newPlayers[playerId]
       return newPlayers
@@ -538,17 +545,15 @@ export default function Gallery({ username }: GalleryProps) {
       playerRotationRef.current = camera.rotation.y
 
       // Update our own player model if it exists - only if we've moved
-      if (myId && myPlayerRef.current.model && oldPosition.distanceTo(playerPosition) > 0.01) {
-        myPlayerRef.current.model.position.copy(playerPosition)
-        myPlayerRef.current.model.rotation.y = camera.rotation.y
-
-        if (myPlayerRef.current.nameSprite) {
-          myPlayerRef.current.nameSprite.position.set(
-            playerPosition.x,
-            playerPosition.y + 2.9, // Increased height for name tag
-            playerPosition.z,
-          )
-        }
+      if (myId && playerModelsRef.current[myId] && oldPosition.distanceTo(playerPosition) > 0.01) {
+        const { model, nameSprite } = playerModelsRef.current[myId]
+        model.position.copy(playerPosition)
+        model.rotation.y = camera.rotation.y
+        nameSprite.position.set(
+          playerPosition.x,
+          playerPosition.y + 2.9, // Increased height for name tag
+          playerPosition.z,
+        )
 
         // Broadcast position to other players via the custom event
         if (time - lastUpdateTime > 100) {
@@ -1100,6 +1105,11 @@ export default function Gallery({ username }: GalleryProps) {
             </div>
           ))}
         </div>
+      </div>
+      <div className="mt-2">
+        <button onClick={() => window.removeAllPlayers?.()} className="bg-red-600 text-white px-2 py-1 text-xs rounded">
+          Remove All Players
+        </button>
       </div>
       <p className="mt-2 text-gray-400">Press Alt+D to toggle debug</p>
     </div>

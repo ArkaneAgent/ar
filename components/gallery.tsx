@@ -82,11 +82,8 @@ export default function Gallery({ username }: GalleryProps) {
   const handlePlayerJoined = (playerId: string, playerUsername: string, color: string, position: any) => {
     addDebugLog(`Player joined: ${playerUsername} (${playerId})`)
 
-    // Skip if this is our own player
-    if (playerId === myId) {
-      addDebugLog("Ignoring own player join event")
-      return
-    }
+    // Skip if this is our own player but make sure we create our own model
+    const isOwnPlayer = playerId === myId
 
     // Create a new player model if we have a scene
     if (sceneRef.current) {
@@ -112,6 +109,17 @@ export default function Gallery({ username }: GalleryProps) {
       sceneRef.current.add(playerModel)
       sceneRef.current.add(nameSprite)
 
+      // If this is our own player, store a reference
+      if (isOwnPlayer) {
+        myPlayerRef.current = {
+          model: playerModel,
+          nameSprite: nameSprite,
+        }
+        addDebugLog(`Created my own player model`)
+      } else {
+        addDebugLog(`Added player model for: ${playerUsername}`)
+      }
+
       // Add to players state
       setPlayers((prev) => ({
         ...prev,
@@ -125,8 +133,6 @@ export default function Gallery({ username }: GalleryProps) {
           nameSprite,
         },
       }))
-
-      addDebugLog(`Added player model for: ${playerUsername}`)
     }
   }
 
@@ -1031,6 +1037,12 @@ export default function Gallery({ username }: GalleryProps) {
     window.addEventListener("keydown", handleKeyPress)
     return () => window.removeEventListener("keydown", handleKeyPress)
   }, [])
+
+  // Add this effect to expose players to the window for debugging
+  useEffect(() => {
+    // Expose players to window for debugging
+    ;(window as any).players = players
+  }, [players])
 
   // Debug overlay
   const debugOverlay = debugMode ? (

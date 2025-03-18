@@ -116,7 +116,14 @@ export default function Gallery({ username }: GalleryProps) {
           break
         case "KeyE":
           if (nearbyCanvas && !drawingMode && controls.isLocked) {
+            console.log("Entering drawing mode for canvas:", nearbyCanvas.userData?.id)
             enterDrawingMode(nearbyCanvas)
+          } else if (!drawingMode && controls.isLocked) {
+            console.log("Pressed E but no canvas nearby or not eligible:", {
+              nearbyCanvas: !!nearbyCanvas,
+              drawingMode,
+              isLocked: controls.isLocked,
+            })
           }
           break
       }
@@ -170,8 +177,8 @@ export default function Gallery({ username }: GalleryProps) {
     })
 
     // Improved lighting
-    // Ambient light
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.8) // Increased intensity
+    // Ambient light - increased intensity for better overall lighting
+    const ambientLight = new THREE.AmbientLight(0xffffff, 1.2) // Further increased intensity
     scene.add(ambientLight)
 
     // Hemisphere light for more natural lighting
@@ -278,6 +285,20 @@ export default function Gallery({ username }: GalleryProps) {
 
       // Store current rotation
       playerRotationRef.current = camera.rotation.y
+
+      // Update our own player model if it exists
+      if (myId && players[myId]?.model) {
+        players[myId].model.position.copy(playerPosition)
+        players[myId].model.rotation.y = camera.rotation.y
+
+        if (players[myId].nameSprite) {
+          players[myId].nameSprite.position.set(
+            playerPosition.x,
+            playerPosition.y + 2.9, // Increased height for name tag
+            playerPosition.z,
+          )
+        }
+      }
 
       // Check for canvas interaction
       checkCanvasInteraction()
@@ -495,6 +516,31 @@ export default function Gallery({ username }: GalleryProps) {
       rotationZ: number,
       id: string,
     ) {
+      function setupDefaultCanvas(ctx: CanvasRenderingContext2D) {
+        // Fill with white
+        ctx.fillStyle = "white"
+        ctx.fillRect(0, 0, 1024, 768)
+
+        // Add grid pattern
+        ctx.strokeStyle = "#f0f0f0"
+        ctx.lineWidth = 1
+
+        // Grid lines
+        for (let x = 0; x <= 1024; x += 50) {
+          ctx.beginPath()
+          ctx.moveTo(x, 0)
+          ctx.lineTo(x, 768)
+          ctx.stroke()
+        }
+
+        for (let y = 0; y <= 768; y += 50) {
+          ctx.beginPath()
+          ctx.moveTo(0, y)
+          ctx.lineTo(1024, y)
+          ctx.stroke()
+        }
+      }
+
       // Frame
       const frameGeometry = new THREE.BoxGeometry(2.4, 1.8, 0.05)
       const frameMaterial = new THREE.MeshStandardMaterial({
@@ -521,39 +567,32 @@ export default function Gallery({ username }: GalleryProps) {
 
       if (offCtx) {
         // Try to load saved canvas data
-        const savedData = localStorage.getItem(`canvas-${id}`)
+        const savedDataString = localStorage.getItem(`canvas-${id}`)
 
-        if (savedData) {
-          // Load the saved image
-          const img = new Image()
-          img.onload = () => {
-            offCtx.drawImage(img, 0, 0)
-            canvasTexture.needsUpdate = true
+        if (savedDataString) {
+          try {
+            const savedData = JSON.parse(savedDataString)
+            const currentTime = Date.now()
+            // Check if data is less than 30 minutes old (1800000 ms)
+            if (savedData.timestamp && currentTime - savedData.timestamp < 1800000) {
+              // Load the saved image
+              const img = new Image()
+              img.onload = () => {
+                offCtx.drawImage(img, 0, 0)
+                canvasTexture.needsUpdate = true
+              }
+              img.src = savedData.imageData
+            } else {
+              // Data is too old, clear it
+              localStorage.removeItem(`canvas-${id}`)
+              setupDefaultCanvas(offCtx)
+            }
+          } catch (e) {
+            console.error("Error parsing saved canvas data:", e)
+            setupDefaultCanvas(offCtx)
           }
-          img.src = savedData
         } else {
-          // Fill with white
-          offCtx.fillStyle = "white"
-          offCtx.fillRect(0, 0, 1024, 768)
-
-          // Add grid pattern
-          offCtx.strokeStyle = "#f0f0f0"
-          offCtx.lineWidth = 1
-
-          // Grid lines
-          for (let x = 0; x <= 1024; x += 50) {
-            offCtx.beginPath()
-            offCtx.moveTo(x, 0)
-            offCtx.lineTo(x, 768)
-            offCtx.stroke()
-          }
-
-          for (let y = 0; y <= 768; y += 50) {
-            offCtx.beginPath()
-            offCtx.moveTo(0, y)
-            offCtx.lineTo(1024, y)
-            offCtx.stroke()
-          }
+          setupDefaultCanvas(offCtx)
         }
       }
 
@@ -592,8 +631,12 @@ export default function Gallery({ username }: GalleryProps) {
       const intersects = raycaster.intersectObjects(canvases)
 
       if (intersects.length > 0 && intersects[0].distance < 3) {
-        setNearbyCanvas(intersects[0].object as THREE.Mesh)
+        const canvasObject = intersects[0].object as THREE.Mesh
+        setNearbyCanvas(canvasObject)
         setInteractionPrompt("Press E to draw on canvas")
+
+        // Debug info
+        console.log("Looking at canvas:", canvasObject.userData.id, "Distance:", intersects[0].distance)
       } else {
         setNearbyCanvas(null)
         setInteractionPrompt("")
@@ -627,6 +670,38 @@ export default function Gallery({ username }: GalleryProps) {
 
         // Join the gallery by connecting to a signaling server or known peers
         joinGallery(id, playerColor)
+
+        // Create a player model for ourselves (so others can see us)
+        const playerModel = new PlayerModel(
+          playerColor,
+          new THREE.Vector3(playerPosition.x, playerPosition.y, playerPosition.z),
+        )
+
+        const nameSprite = new TextSprite(
+          username,
+          new THREE.Vector3(
+            playerPosition.x,
+            playerPosition.y + 2.2, // Position above player
+            playerPosition.z,
+          ),
+        )
+
+        scene.add(playerModel)
+        scene.add(nameSprite)
+
+        // Add ourselves to the players list
+        setPlayers((prev) => ({
+          ...prev,
+          [id]: {
+            id,
+            username,
+            position: new THREE.Vector3(playerPosition.x, playerPosition.y, playerPosition.z),
+            rotation: playerRotationRef.current,
+            color: playerColor,
+            model: playerModel,
+            nameSprite,
+          },
+        }))
       })
 
       // Handle incoming connections
@@ -687,9 +762,9 @@ export default function Gallery({ username }: GalleryProps) {
       // In a real application, you would have a signaling server to discover peers
       // For simplicity, we'll use a hardcoded list of known peers or a URL parameter
 
-      // Check if there's a peer ID in the URL to connect to
+      // Check if there's a peer ID in the URL to connect to (using shorter parameter name)
       const urlParams = new URLSearchParams(window.location.search)
-      const connectToPeer = urlParams.get("peer")
+      const connectToPeer = urlParams.get("p") || urlParams.get("peer") // Support both formats
 
       if (connectToPeer && connectToPeer !== peerId) {
         // Connect to the specified peer
@@ -700,10 +775,10 @@ export default function Gallery({ username }: GalleryProps) {
         })
       }
 
-      // Update the URL with our peer ID for others to connect
-      const newUrl = new URL(window.location.href)
-      newUrl.searchParams.set("peer", peerId)
-      window.history.replaceState({}, "", newUrl.toString())
+      // Update the URL with our peer ID for others to connect - make it shorter
+      const baseUrl = window.location.origin + window.location.pathname
+      const newUrl = `${baseUrl}?p=${peerId}`
+      window.history.replaceState({}, "", newUrl)
 
       // Display connection info
       console.log("Share this URL for others to join:", window.location.href)
@@ -849,8 +924,12 @@ export default function Gallery({ username }: GalleryProps) {
             texture.needsUpdate = true
           }
 
-          // Save to localStorage
-          localStorage.setItem(`canvas-${canvasId}`, imageData)
+          // Save to localStorage with timestamp to allow for expiration
+          const canvasData = {
+            imageData,
+            timestamp: Date.now(),
+          }
+          localStorage.setItem(`canvas-${canvasId}`, JSON.stringify(canvasData))
         }
         img.src = imageData
       }
@@ -917,9 +996,13 @@ export default function Gallery({ username }: GalleryProps) {
           texture.needsUpdate = true
         }
 
-        // Save to localStorage
+        // Save to localStorage with timestamp
         const imageData = offScreenCanvas.toDataURL("image/png")
-        localStorage.setItem(`canvas-${canvasId}`, imageData)
+        const canvasData = {
+          imageData,
+          timestamp: Date.now(),
+        }
+        localStorage.setItem(`canvas-${canvasId}`, JSON.stringify(canvasData))
 
         // Broadcast to other peers
         Object.values(connectionsRef.current).forEach((conn) => {
@@ -981,4 +1064,3 @@ export default function Gallery({ username }: GalleryProps) {
     </div>
   )
 }
-

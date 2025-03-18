@@ -43,6 +43,7 @@ export default function Gallery({ username }: GalleryProps) {
   const [interactionPrompt, setInteractionPrompt] = useState("")
   const [players, setPlayers] = useState<Record<string, Player>>({})
   const [myId, setMyId] = useState<string>("")
+  const [shareUrl, setShareUrl] = useState<string>("")
   const playerPositionRef = useRef<THREE.Vector3>(new THREE.Vector3(0, 1.6, 5))
   const playerRotationRef = useRef<number>(0)
   const myPlayerRef = useRef<{ model: PlayerModel | null; nameSprite: TextSprite | null }>({
@@ -51,6 +52,8 @@ export default function Gallery({ username }: GalleryProps) {
   })
   const [debugMode, setDebugMode] = useState(false)
   const [canvasInteractionEnabled, setCanvasInteractionEnabled] = useState(true)
+  const [peerInitialized, setPeerInitialized] = useState(false)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
 
   // Function to handle entering drawing mode - defined at component level
   const enterDrawingMode = (canvasObj: THREE.Mesh) => {
@@ -215,6 +218,11 @@ export default function Gallery({ username }: GalleryProps) {
 
     // Setup peer connection for multiplayer
     function setupPeerConnection() {
+      if (peerInitialized) {
+        console.log("Peer already initialized, skipping setup")
+        return
+      }
+
       // Generate a random color for this player
       const playerColor = getRandomColor()
 
@@ -227,6 +235,7 @@ export default function Gallery({ username }: GalleryProps) {
       })
 
       peerRef.current = peer
+      setPeerInitialized(true)
 
       // On connection established
       peer.on("open", (id) => {
@@ -830,11 +839,13 @@ export default function Gallery({ username }: GalleryProps) {
         const baseUrl = window.location.origin + window.location.pathname
         const newUrl = `${baseUrl}?p=${peerId}`
         window.history.replaceState({}, "", newUrl)
+        setShareUrl(newUrl)
         console.log("Created new gallery with peer ID:", peerId)
       }
 
       // Display connection info
       console.log("Share this URL for others to join:", window.location.href)
+      setShareUrl(window.location.href)
     }
 
     function connectToPeerById(targetPeerId: string) {
@@ -1010,24 +1021,37 @@ export default function Gallery({ username }: GalleryProps) {
       const offCtx = offScreenCanvas.getContext("2d")
 
       if (offCtx) {
-        const img = new Image()
-        img.onload = () => {
-          offCtx.drawImage(img, 0, 0)
+        try {
+          let imgData = imageData
 
-          // Update the texture
-          const texture = (canvas.material as THREE.MeshBasicMaterial).map
-          if (texture) {
-            texture.needsUpdate = true
+          // If imageData is a JSON string, parse it
+          if (typeof imageData === "string" && imageData.startsWith("{")) {
+            const parsedData = JSON.parse(imageData)
+            imgData = parsedData.imageData
           }
 
-          // Save to localStorage with timestamp to allow for expiration
-          const canvasData = {
-            imageData,
-            timestamp: Date.now(),
+          const img = new Image()
+          img.crossOrigin = "anonymous"
+          img.onload = () => {
+            offCtx.drawImage(img, 0, 0)
+
+            // Update the texture
+            const texture = (canvas.material as THREE.MeshBasicMaterial).map
+            if (texture) {
+              texture.needsUpdate = true
+            }
+
+            // Save to localStorage with timestamp to allow for expiration
+            const canvasData = {
+              imageData: imgData,
+              timestamp: Date.now(),
+            }
+            localStorage.setItem(`canvas-${canvasId}`, JSON.stringify(canvasData))
           }
-          localStorage.setItem(`canvas-${canvasId}`, JSON.stringify(canvasData))
+          img.src = imgData
+        } catch (e) {
+          console.error("Error handling canvas data:", e)
         }
-        img.src = imageData
       }
     }
 
@@ -1077,57 +1101,74 @@ export default function Gallery({ username }: GalleryProps) {
 
     // Expose functions to React component
     window.exitDrawingMode = (drawingCanvas: HTMLCanvasElement) => {
-      if (!currentCanvas) return
-
-      // Get the canvas data
-      const canvasId = currentCanvas.userData.id
-      const offScreenCanvas = currentCanvas.userData.offScreenCanvas
-      const offCtx = offScreenCanvas.getContext("2d")
-
-      if (offCtx) {
-        // Copy drawing to the texture
-        offCtx.drawImage(drawingCanvas, 0, 0, offScreenCanvas.width, offScreenCanvas.height)
-
-        // Update the texture
-        const texture = (currentCanvas.material as THREE.MeshBasicMaterial).map
-        if (texture) {
-          texture.needsUpdate = true
-        }
-
-        // Save to localStorage with timestamp
-        const imageData = offScreenCanvas.toDataURL("image/png")
-        const canvasData = {
-          imageData,
-          timestamp: Date.now(),
-        }
-        localStorage.setItem(`canvas-${canvasId}`, JSON.stringify(canvasData))
-
-        // Broadcast to other peers
-        Object.values(connectionsRef.current).forEach((conn) => {
-          conn.send({
-            type: "updateCanvas",
-            data: {
-              canvasId,
-              imageData,
-            },
-          })
-        })
+      if (!currentCanvas) {
+        console.error("No current canvas to save to")
+        setDrawingMode(false)
+        setTimeout(() => {
+          controls.lock()
+        }, 100)
+        return
       }
 
-      // Reset state
-      setDrawingMode(false)
-      setCurrentCanvas(null)
+      try {
+        // Get the canvas data
+        const canvasId = currentCanvas.userData.id
+        const offScreenCanvas = currentCanvas.userData.offScreenCanvas
+        const offCtx = offScreenCanvas.getContext("2d")
 
-      // Temporarily disable canvas interaction to prevent immediate re-entry
-      setCanvasInteractionEnabled(false)
-      setTimeout(() => {
-        setCanvasInteractionEnabled(true)
-      }, 500)
+        if (offCtx) {
+          // Copy drawing to the texture
+          offCtx.drawImage(drawingCanvas, 0, 0, offScreenCanvas.width, offScreenCanvas.height)
 
-      // Re-lock controls
-      setTimeout(() => {
-        controls.lock()
-      }, 100)
+          // Update the texture
+          const texture = (currentCanvas.material as THREE.MeshBasicMaterial).map
+          if (texture) {
+            texture.needsUpdate = true
+          }
+
+          // Save to localStorage with timestamp
+          const imageData = offScreenCanvas.toDataURL("image/png")
+          const canvasData = {
+            imageData,
+            timestamp: Date.now(),
+          }
+          localStorage.setItem(`canvas-${canvasId}`, JSON.stringify(canvasData))
+
+          // Broadcast to other peers
+          Object.values(connectionsRef.current).forEach((conn) => {
+            conn.send({
+              type: "updateCanvas",
+              data: {
+                canvasId,
+                imageData,
+              },
+            })
+          })
+        }
+
+        // Reset state
+        setDrawingMode(false)
+        setCurrentCanvas(null)
+
+        // Temporarily disable canvas interaction to prevent immediate re-entry
+        setCanvasInteractionEnabled(false)
+        setTimeout(() => {
+          setCanvasInteractionEnabled(true)
+        }, 500)
+
+        // Re-lock controls
+        setTimeout(() => {
+          controls.lock()
+        }, 100)
+      } catch (error) {
+        console.error("Error in exitDrawingMode:", error)
+        // Force exit drawing mode
+        setDrawingMode(false)
+        setCurrentCanvas(null)
+        setTimeout(() => {
+          controls.lock()
+        }, 100)
+      }
     }
 
     // Start animation loop
@@ -1149,7 +1190,7 @@ export default function Gallery({ username }: GalleryProps) {
 
       renderer.dispose()
     }
-  }, [username, myId])
+  }, [username, myId, peerInitialized])
 
   // Add a direct event listener for the E key at the component level
   useEffect(() => {
@@ -1178,11 +1219,37 @@ export default function Gallery({ username }: GalleryProps) {
     return () => window.removeEventListener("click", handleClick)
   }, [nearbyCanvas, drawingMode, started, canvasInteractionEnabled])
 
+  // Add a handler for the ESC key to exit drawing mode
+  useEffect(() => {
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && drawingMode) {
+        if (window.exitDrawingMode && canvasRef.current) {
+          window.exitDrawingMode(canvasRef.current)
+        } else {
+          // Force exit drawing mode
+          setDrawingMode(false)
+          setCurrentCanvas(null)
+        }
+      }
+    }
+
+    window.addEventListener("keydown", handleEsc)
+    return () => window.removeEventListener("keydown", handleEsc)
+  }, [drawingMode])
+
   const connectionInfoText = myId ? (
     <div className="absolute bottom-4 left-4 z-10 rounded bg-black/70 p-2 text-white">
       <p>Share this URL for others to join:</p>
-      <p className="text-xs">{window.location.href}</p>
-      <p className="mt-2 text-xs">You can open this URL in multiple browsers to test multiplayer.</p>
+      <p
+        className="text-xs select-all cursor-pointer"
+        onClick={() => {
+          navigator.clipboard.writeText(shareUrl)
+          alert("URL copied to clipboard!")
+        }}
+      >
+        {shareUrl}
+      </p>
+      <p className="mt-2 text-xs">Click the URL above to copy it to clipboard</p>
       <p className="text-xs">Each browser creates a separate player with its own connection.</p>
       <p className="mt-2 text-xs font-bold">Connected players: {Object.keys(players).length}</p>
     </div>
@@ -1205,6 +1272,7 @@ export default function Gallery({ username }: GalleryProps) {
         })}
       </p>
       <p>My ID: {myId}</p>
+      <p>Share URL: {shareUrl}</p>
       <p>Players Connected: {Object.keys(players).length}</p>
       <p>Player List: {Object.keys(players).join(", ")}</p>
       <p className="mt-2 text-gray-400">Press Alt+D to toggle debug</p>

@@ -54,15 +54,25 @@ export function DrawingInterface() {
 
     // Setup event listeners
     const handleMouseDown = (e: MouseEvent) => {
+      e.preventDefault() // Prevent default behavior
       setDrawing(true)
       const rect = canvas.getBoundingClientRect()
       lastPosRef.current = {
         x: e.clientX - rect.left,
         y: e.clientY - rect.top,
       }
+
+      // Draw a single dot at the starting position
+      if (ctx) {
+        ctx.beginPath()
+        ctx.arc(lastPosRef.current.x, lastPosRef.current.y, brushSize / 2, 0, Math.PI * 2)
+        ctx.fillStyle = color
+        ctx.fill()
+      }
     }
 
     const handleMouseMove = (e: MouseEvent) => {
+      e.preventDefault() // Prevent default behavior
       if (!drawing || !lastPosRef.current) return
 
       const rect = canvas.getBoundingClientRect()
@@ -82,7 +92,8 @@ export function DrawingInterface() {
       lastPosRef.current = { x, y }
     }
 
-    const handleMouseUp = () => {
+    const handleMouseUp = (e: MouseEvent) => {
+      e.preventDefault() // Prevent default behavior
       setDrawing(false)
       lastPosRef.current = null
     }
@@ -93,10 +104,64 @@ export function DrawingInterface() {
       }
     }
 
-    canvas.addEventListener("mousedown", handleMouseDown)
-    canvas.addEventListener("mousemove", handleMouseMove)
-    canvas.addEventListener("mouseup", handleMouseUp)
-    canvas.addEventListener("mouseout", handleMouseUp)
+    // Add touch support
+    const handleTouchStart = (e: TouchEvent) => {
+      e.preventDefault() // Prevent default behavior
+      if (e.touches.length > 0) {
+        setDrawing(true)
+        const rect = canvas.getBoundingClientRect()
+        lastPosRef.current = {
+          x: e.touches[0].clientX - rect.left,
+          y: e.touches[0].clientY - rect.top,
+        }
+
+        // Draw a single dot at the starting position
+        if (ctx) {
+          ctx.beginPath()
+          ctx.arc(lastPosRef.current.x, lastPosRef.current.y, brushSize / 2, 0, Math.PI * 2)
+          ctx.fillStyle = color
+          ctx.fill()
+        }
+      }
+    }
+
+    const handleTouchMove = (e: TouchEvent) => {
+      e.preventDefault() // Prevent default behavior
+      if (!drawing || !lastPosRef.current || e.touches.length === 0) return
+
+      const rect = canvas.getBoundingClientRect()
+      const x = e.touches[0].clientX - rect.left
+      const y = e.touches[0].clientY - rect.top
+
+      ctx.lineWidth = brushSize
+      ctx.lineCap = "round"
+      ctx.lineJoin = "round"
+      ctx.strokeStyle = color
+
+      ctx.beginPath()
+      ctx.moveTo(lastPosRef.current.x, lastPosRef.current.y)
+      ctx.lineTo(x, y)
+      ctx.stroke()
+
+      lastPosRef.current = { x, y }
+    }
+
+    const handleTouchEnd = (e: TouchEvent) => {
+      e.preventDefault() // Prevent default behavior
+      setDrawing(false)
+      lastPosRef.current = null
+    }
+
+    canvas.addEventListener("mousedown", handleMouseDown, { passive: false })
+    canvas.addEventListener("mousemove", handleMouseMove, { passive: false })
+    canvas.addEventListener("mouseup", handleMouseUp, { passive: false })
+    canvas.addEventListener("mouseout", handleMouseUp, { passive: false })
+
+    // Add touch events
+    canvas.addEventListener("touchstart", handleTouchStart, { passive: false })
+    canvas.addEventListener("touchmove", handleTouchMove, { passive: false })
+    canvas.addEventListener("touchend", handleTouchEnd, { passive: false })
+
     document.addEventListener("keydown", handleKeyDown)
 
     return () => {
@@ -104,6 +169,11 @@ export function DrawingInterface() {
       canvas.removeEventListener("mousemove", handleMouseMove)
       canvas.removeEventListener("mouseup", handleMouseUp)
       canvas.removeEventListener("mouseout", handleMouseUp)
+
+      canvas.removeEventListener("touchstart", handleTouchStart)
+      canvas.removeEventListener("touchmove", handleTouchMove)
+      canvas.removeEventListener("touchend", handleTouchEnd)
+
       document.removeEventListener("keydown", handleKeyDown)
     }
   }, [drawing, color, brushSize])
@@ -141,8 +211,21 @@ export function DrawingInterface() {
     if (canvasRef.current && window.exitDrawingMode) {
       setSaveAttempted(true)
       try {
-        window.exitDrawingMode(canvasRef.current)
-        console.log("Drawing saved and exited successfully")
+        // Create a copy of the canvas data to ensure it persists
+        const tempCanvas = document.createElement("canvas")
+        tempCanvas.width = canvasRef.current.width
+        tempCanvas.height = canvasRef.current.height
+        const tempCtx = tempCanvas.getContext("2d")
+
+        if (tempCtx) {
+          tempCtx.drawImage(canvasRef.current, 0, 0)
+
+          // Now pass this temp canvas to exitDrawingMode
+          window.exitDrawingMode(tempCanvas)
+          console.log("Drawing saved and exited successfully")
+        } else {
+          throw new Error("Could not get context from temp canvas")
+        }
       } catch (error) {
         console.error("Error saving drawing:", error)
         // Force exit drawing mode after 500ms if exitDrawingMode fails
@@ -179,14 +262,21 @@ export function DrawingInterface() {
   }
 
   return (
-    <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-black/80">
+    <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/80">
       <div className="relative">
         <canvas
           ref={canvasRef}
           width={1024}
           height={768}
-          className="border-4 border-gray-800 bg-white shadow-2xl cursor-crosshair"
-          style={{ touchAction: "none" }}
+          className="border-4 border-gray-800 bg-white shadow-2xl"
+          style={{
+            cursor: "crosshair",
+            touchAction: "none",
+            userSelect: "none",
+            WebkitUserSelect: "none",
+            MozUserSelect: "none",
+            msUserSelect: "none",
+          }}
         />
         <div className="absolute -top-10 left-0 right-0 text-center">
           <h2 className="text-2xl font-bold text-white bg-black/50 py-2 rounded-t-lg">Drawing Mode</h2>

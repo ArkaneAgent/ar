@@ -214,7 +214,140 @@ export default function Gallery({ username }: GalleryProps) {
     placeCanvases()
 
     // Setup peer connection for multiplayer
-    setupPeerConnection()
+    function setupPeerConnection() {
+      // Generate a random color for this player
+      const playerColor = getRandomColor()
+
+      // Create a new Peer with a random ID
+      const peer = new Peer({
+        debug: 1, // Reduce debug level for better performance
+        config: {
+          iceServers: [{ urls: "stun:stun.l.google.com:19302" }, { urls: "stun:global.stun.twilio.com:3478" }],
+        },
+      })
+
+      peerRef.current = peer
+
+      // On connection established
+      peer.on("open", (id) => {
+        console.log("My peer ID is:", id)
+        setMyId(id)
+
+        // IMPORTANT: Clean up any existing player models before creating new ones
+        if (myPlayerRef.current.model) {
+          scene.remove(myPlayerRef.current.model)
+        }
+        if (myPlayerRef.current.nameSprite) {
+          scene.remove(myPlayerRef.current.nameSprite)
+        }
+
+        // Join the gallery by connecting to a signaling server or known peers
+        joinGallery(id, playerColor)
+
+        // Create a player model for ourselves (so others can see us)
+        // Set y position explicitly to 1.6 to ensure consistent height
+        const playerPos = new THREE.Vector3(playerPosition.x, 1.6, playerPosition.z)
+        const playerModel = new PlayerModel(playerColor, playerPos)
+
+        const nameSprite = new TextSprite(
+          username,
+          new THREE.Vector3(
+            playerPos.x,
+            playerPos.y + 2.2, // Position above player
+            playerPos.z,
+          ),
+        )
+
+        // Store references to our own model and sprite
+        myPlayerRef.current = {
+          model: playerModel,
+          nameSprite: nameSprite,
+        }
+
+        scene.add(playerModel)
+        scene.add(nameSprite)
+
+        // Add ourselves to the players list - REPLACE existing entry if it exists
+        setPlayers((prev) => {
+          // Create a new object without our previous entry (if it exists)
+          const newPlayers = { ...prev }
+
+          // If we already had an entry, remove it
+          if (newPlayers[id]) {
+            delete newPlayers[id]
+          }
+
+          // Add our new entry
+          return {
+            ...newPlayers,
+            [id]: {
+              id,
+              username,
+              position: playerPos,
+              rotation: playerRotationRef.current,
+              color: playerColor,
+              model: playerModel,
+              nameSprite,
+            },
+          }
+        })
+      })
+
+      // Handle incoming connections
+      peer.on("connection", (conn) => {
+        console.log("Incoming connection from:", conn.peer)
+
+        // Store the connection
+        connectionsRef.current[conn.peer] = conn
+
+        // Handle data from this peer
+        setupConnectionHandlers(conn)
+
+        // Send our info to the new peer
+        conn.on("open", () => {
+          console.log("Connection opened with peer:", conn.peer)
+
+          // Send our player info
+          conn.send({
+            type: "playerInfo",
+            data: {
+              id: peer.id,
+              username,
+              position: {
+                x: playerPosition.x,
+                y: 1.6, // Ensure consistent height
+                z: playerPosition.z,
+              },
+              rotation: playerRotationRef.current,
+              color: playerColor,
+            },
+          })
+
+          // Send canvas data
+          canvases.forEach((canvas) => {
+            const canvasId = canvas.userData.id
+            const savedData = localStorage.getItem(`canvas-${canvasId}`)
+
+            if (savedData) {
+              conn.send({
+                type: "canvasData",
+                data: {
+                  canvasId,
+                  imageData: savedData,
+                },
+              })
+            }
+          })
+        })
+      })
+
+      // Handle errors
+      peer.on("error", (err) => {
+        console.error("Peer error:", err)
+      })
+
+      return peer
+    }
 
     // Animation loop
     let prevTime = performance.now()
@@ -223,8 +356,11 @@ export default function Gallery({ username }: GalleryProps) {
     function animate() {
       requestAnimationFrame(animate)
 
-      // Update pill statue rotation
-      pillStatue.rotation.y += 0.005
+      // Update pill statue rotation - reduce frequency for better performance
+      if (Math.random() < 0.1) {
+        // Only update 10% of the time
+        pillStatue.rotation.y += 0.005
+      }
 
       // Skip movement if controls are not locked
       if (!controls.isLocked) {
@@ -283,19 +419,21 @@ export default function Gallery({ username }: GalleryProps) {
         canJump = true
       }
 
-      // Check wall collisions
-      const playerBoundingSphere = new THREE.Sphere(playerPosition, 0.5)
-      let collision = false
+      // Check wall collisions - optimize by only checking if we've moved
+      if (oldPosition.distanceTo(playerPosition) > 0.01) {
+        const playerBoundingSphere = new THREE.Sphere(playerPosition, 0.5)
+        let collision = false
 
-      for (let i = 0; i < walls.length; i++) {
-        if (walls[i].intersectsSphere(playerBoundingSphere)) {
-          collision = true
-          break
+        for (let i = 0; i < walls.length; i++) {
+          if (walls[i].intersectsSphere(playerBoundingSphere)) {
+            collision = true
+            break
+          }
         }
-      }
 
-      if (collision) {
-        playerPosition.copy(oldPosition)
+        if (collision) {
+          playerPosition.copy(oldPosition)
+        }
       }
 
       // Update camera position
@@ -304,8 +442,8 @@ export default function Gallery({ username }: GalleryProps) {
       // Store current rotation
       playerRotationRef.current = camera.rotation.y
 
-      // Update our own player model if it exists
-      if (myId && myPlayerRef.current.model) {
+      // Update our own player model if it exists - only if we've moved
+      if (myId && myPlayerRef.current.model && oldPosition.distanceTo(playerPosition) > 0.01) {
         myPlayerRef.current.model.position.copy(playerPosition)
         myPlayerRef.current.model.rotation.y = camera.rotation.y
 
@@ -318,11 +456,14 @@ export default function Gallery({ username }: GalleryProps) {
         }
       }
 
-      // Check for canvas interaction
-      checkCanvasInteraction()
+      // Check for canvas interaction - only do this occasionally for performance
+      if (Math.random() < 0.2) {
+        // Only check 20% of the time
+        checkCanvasInteraction()
+      }
 
-      // Send position update to peers (limit to 10 updates per second)
-      if (time - lastUpdateTime > 100 && peerRef.current) {
+      // Send position update to peers (limit to 5 updates per second for better performance)
+      if (time - lastUpdateTime > 200 && peerRef.current) {
         lastUpdateTime = time
 
         // Send position update to all connected peers
@@ -666,122 +807,6 @@ export default function Gallery({ username }: GalleryProps) {
       }
     }
 
-    function setupPeerConnection() {
-      // Generate a random color for this player
-      const playerColor = getRandomColor()
-
-      // Create a new Peer with a random ID
-      const peer = new Peer({
-        debug: 2,
-        config: {
-          iceServers: [{ urls: "stun:stun.l.google.com:19302" }, { urls: "stun:global.stun.twilio.com:3478" }],
-        },
-      })
-
-      peerRef.current = peer
-
-      // On connection established
-      peer.on("open", (id) => {
-        console.log("My peer ID is:", id)
-        setMyId(id)
-
-        // Join the gallery by connecting to a signaling server or known peers
-        joinGallery(id, playerColor)
-
-        // Create a player model for ourselves (so others can see us)
-        // Set y position explicitly to 1.6 to ensure consistent height
-        const playerPos = new THREE.Vector3(playerPosition.x, 1.6, playerPosition.z)
-        const playerModel = new PlayerModel(playerColor, playerPos)
-
-        const nameSprite = new TextSprite(
-          username,
-          new THREE.Vector3(
-            playerPos.x,
-            playerPos.y + 2.2, // Position above player
-            playerPos.z,
-          ),
-        )
-
-        // Store references to our own model and sprite
-        myPlayerRef.current = {
-          model: playerModel,
-          nameSprite: nameSprite,
-        }
-
-        scene.add(playerModel)
-        scene.add(nameSprite)
-
-        // Add ourselves to the players list
-        setPlayers((prev) => ({
-          ...prev,
-          [id]: {
-            id,
-            username,
-            position: playerPos,
-            rotation: playerRotationRef.current,
-            color: playerColor,
-            model: playerModel,
-            nameSprite,
-          },
-        }))
-      })
-
-      // Handle incoming connections
-      peer.on("connection", (conn) => {
-        console.log("Incoming connection from:", conn.peer)
-
-        // Store the connection
-        connectionsRef.current[conn.peer] = conn
-
-        // Handle data from this peer
-        setupConnectionHandlers(conn)
-
-        // Send our info to the new peer
-        conn.on("open", () => {
-          console.log("Connection opened with peer:", conn.peer)
-
-          // Send our player info
-          conn.send({
-            type: "playerInfo",
-            data: {
-              id: peer.id,
-              username,
-              position: {
-                x: playerPosition.x,
-                y: 1.6, // Ensure consistent height
-                z: playerPosition.z,
-              },
-              rotation: playerRotationRef.current,
-              color: playerColor,
-            },
-          })
-
-          // Send canvas data
-          canvases.forEach((canvas) => {
-            const canvasId = canvas.userData.id
-            const savedData = localStorage.getItem(`canvas-${canvasId}`)
-
-            if (savedData) {
-              conn.send({
-                type: "canvasData",
-                data: {
-                  canvasId,
-                  imageData: savedData,
-                },
-              })
-            }
-          })
-        })
-      })
-
-      // Handle errors
-      peer.on("error", (err) => {
-        console.error("Peer error:", err)
-      })
-
-      return peer
-    }
-
     function joinGallery(peerId: string, playerColor: string) {
       // Check if there's a peer ID in the URL to connect to
       const urlParams = new URLSearchParams(window.location.search)
@@ -875,6 +900,7 @@ export default function Gallery({ username }: GalleryProps) {
       })
     }
 
+    // Fix the handlePlayerInfo function to prevent duplicates
     function handlePlayerInfo(playerData: any) {
       // Skip if this is our own player info
       if (playerData.id === myId) {
@@ -883,6 +909,19 @@ export default function Gallery({ username }: GalleryProps) {
       }
 
       console.log("Creating player model for:", playerData.username)
+
+      // IMPORTANT: Remove any existing models for this player first
+      setPlayers((prev) => {
+        if (prev[playerData.id]) {
+          if (prev[playerData.id].model) {
+            scene.remove(prev[playerData.id].model)
+          }
+          if (prev[playerData.id].nameSprite) {
+            scene.remove(prev[playerData.id].nameSprite)
+          }
+        }
+        return prev
+      })
 
       // Create a new player model
       const playerModel = new PlayerModel(
@@ -904,18 +943,17 @@ export default function Gallery({ username }: GalleryProps) {
 
       // Add to players list
       setPlayers((prev) => {
-        // If player already exists, remove old models first
-        if (prev[playerData.id]) {
-          if (prev[playerData.id].model) {
-            scene.remove(prev[playerData.id].model)
-          }
-          if (prev[playerData.id].nameSprite) {
-            scene.remove(prev[playerData.id].nameSprite)
-          }
+        // Create a new object without this player's previous entry
+        const newPlayers = { ...prev }
+
+        // If player already existed, remove old entry
+        if (newPlayers[playerData.id]) {
+          delete newPlayers[playerData.id]
         }
 
+        // Add the new entry
         return {
-          ...prev,
+          ...newPlayers,
           [playerData.id]: {
             ...playerData,
             position: new THREE.Vector3(playerData.position.x, playerData.position.y, playerData.position.z),
